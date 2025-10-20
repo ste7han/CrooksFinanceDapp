@@ -9,6 +9,15 @@ import EmpireBank from "./pages/EmpireBank.jsx";
 import EmpireHeists from "./pages/EmpireHeists.jsx";
 import { WalletProvider } from "./context/WalletContext";
 
+// tijdelijk debuggen – mag je later verwijderen
+console.log("ENV DEBUG:", {
+  RPC: import.meta.env.VITE_RPC_URL,
+  MORALIS: import.meta.env.VITE_MORALIS_KEY ? "(key aanwezig)" : "❌ geen key",
+  IMAGE_BASE: import.meta.env.VITE_NFT_IMAGE_BASE,
+  FEED: import.meta.env.VITE_EBISUS_FEED_URL,
+});
+
+
 
 export default function App() {
   return (
