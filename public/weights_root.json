@@ -1,0 +1,9 @@
+{
+  "root": "0x07ec837cc4aa0269fb719ff9c8683038168d9e75d404a329a698b45b24c08dd6",
+  "totalWeight": "20000009000",
+  "weightScale": 1000000,
+  "maxRank": 10000,
+  "minWeight": 1,
+  "maxWeight": 3,
+  "leaves": 10000
+}

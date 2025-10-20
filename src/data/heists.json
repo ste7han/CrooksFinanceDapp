@@ -1,0 +1,260 @@
+{
+  "schema_version": "3.0",
+  "updated_at": "2025-10-19T13:45:00Z",
+  "notes": "Balanced by USD. For each selected token drop, sample a USD value within amount_usd_range, apply lucky_bonus if it procs, then convert to units via amount = usd / token_values_usd[symbol]. Round with token_rounding if present. Equal odds for each token in tokens_pool. Harder heists can drop multiple distinct tokens. Failures lose points only.",
+  "tokens_pool": ["CRO", "CRKS", "MOON", "KRIS", "BONE", "BOBZ", "CRY", "CROCARD"],
+  "token_values_usd": {
+    "CRO": 0.15,
+    "BONE": 0.05,
+    "BOBZ": 0.09,
+    "KRIS": 0.009,
+    "CRKS": 0.001,
+    "MOON": 0.0007,
+    "CRY": 0.000005,
+    "CROCARD": 0.000008
+  },
+  "token_rounding": {
+    "CRO": 4,
+    "BONE": 2,
+    "BOBZ": 3,
+    "KRIS": 0,
+    "CRKS": 0,
+    "MOON": 0,
+    "CRY": 0,
+    "CROCARD": 0
+  },
+  "stamina": { "regen_per_hour": 1 },
+  "ranks": [
+    { "id": 1,  "name": "Prospect",       "stamina_max": 0  },
+    { "id": 2,  "name": "Member",         "stamina_max": 2  },
+    { "id": 3,  "name": "Hustler",        "stamina_max": 4  },
+    { "id": 4,  "name": "Street Soldier", "stamina_max": 6  },
+    { "id": 5,  "name": "Enforcer",       "stamina_max": 8  },
+    { "id": 6,  "name": "Officer",        "stamina_max": 10 },
+    { "id": 7,  "name": "Captain",        "stamina_max": 12 },
+    { "id": 8,  "name": "General",        "stamina_max": 14 },
+    { "id": 9,  "name": "Gang Leader",    "stamina_max": 16 },
+    { "id": 10, "name": "Boss",           "stamina_max": 18 },
+    { "id": 11, "name": "Kingpin",        "stamina_max": 18 },
+    { "id": 12, "name": "Overlord",       "stamina_max": 19 },
+    { "id": 13, "name": "Icon",           "stamina_max": 19 },
+    { "id": 14, "name": "Legend",         "stamina_max": 20 },
+    { "id": 15, "name": "Immortal",       "stamina_max": 20 }
+  ],
+  "lucky_bonus": {
+    "chance": 0.06,
+    "multiplier_range": [2.0, 4.0]
+  },
+  "heists": {
+    "pickpocket": {
+      "title": "Pickpocket",
+      "min_role": "Member",
+      "difficulty": "Easy",
+      "stamina_cost": 1,
+      "recommended_strength": 5,
+      "token_drops": { "min": 1, "max": 1 },
+      "amount_usd_range": [0.005, 0.01],
+      "points_if_success": [2, 5],
+      "loss_points_if_fail": [1, 3],
+      "success_msgs": [
+        "You slipped through the crowd and grabbed {loot} {token} unnoticed.",
+        "With quick fingers, you lifted {loot} {token} from an unsuspecting victim.",
+        "A smooth grab! You gained {loot} {token} in a flash of skill."
+      ],
+      "fail_msgs": [
+        "Your target turned around at the worst moment. You ran.",
+        "You fumbled the grab and drew too much attention.",
+        "A street performer distracted you — and you missed your chance."
+      ]
+    },
+    "shoplift": {
+      "title": "Shoplift",
+      "min_role": "Hustler",
+      "difficulty": "Easy",
+      "stamina_cost": 2,
+      "recommended_strength": 50,
+      "token_drops": { "min": 1, "max": 1 },
+      "amount_usd_range": [0.01, 0.02],
+      "points_if_success": [5, 10],
+      "loss_points_if_fail": [4, 8],
+      "success_msgs": [
+        "You pocketed goods worth {loot} {token} and walked out like a pro.",
+        "Security didn’t stand a chance — you got away with {loot} {token} worth of loot.",
+        "Clean lift! You slipped away with items worth {loot} {token}."
+      ],
+      "fail_msgs": [
+        "A mirror caught your move. You bailed just in time.",
+        "You dropped the goods — rookie mistake.",
+        "An employee gave you the stink eye. Abort mission."
+      ]
+    },
+    "robbery": {
+      "title": "Robbery",
+      "min_role": "Street Soldier",
+      "difficulty": "Medium",
+      "stamina_cost": 3,
+      "recommended_strength": 100,
+      "token_drops": { "min": 1, "max": 1 },
+      "amount_usd_range": [0.02, 0.05],
+      "points_if_success": [10, 15],
+      "loss_points_if_fail": [8, 13],
+      "success_msgs": [
+        "You stormed the shop and left with {loot} {token}. Quick and dirty!",
+        "Masks on, plan tight — you cleared out {loot} {token} worth of goods.",
+        "The getaway was tight, but you escaped with {loot} {token}."
+      ],
+      "fail_msgs": [
+        "A silent alarm ruined everything. You had to ditch the plan.",
+        "The cashier pulled a panic button — not your day.",
+        "You got inside, but the register was empty. Brutal."
+      ]
+    },
+    "breakin": {
+      "title": "Break-In",
+      "min_role": "Enforcer",
+      "difficulty": "Medium",
+      "stamina_cost": 4,
+      "recommended_strength": 250,
+      "token_drops": { "min": 1, "max": 1 },
+      "amount_usd_range": [0.05, 0.10],
+      "points_if_success": [15, 25],
+      "loss_points_if_fail": [10, 20],
+      "success_msgs": [
+        "You bypassed the lock and scooped up {loot} {token} worth of valuables.",
+        "A perfect breach! You grabbed {loot} {token} before anyone noticed.",
+        "The safe cracked open like butter. You scored {loot} {token}."
+      ],
+      "fail_msgs": [
+        "The alarm triggered mid-job. You bolted.",
+        "Too much noise. Someone called it in.",
+        "You tripped over furniture and lost precious time — and your chance."
+      ]
+    },
+    "armedrobbery": {
+      "title": "Armed Robbery",
+      "min_role": "Officer",
+      "difficulty": "Hard",
+      "stamina_cost": 5,
+      "recommended_strength": 400,
+      "token_drops": { "min": 1, "max": 2 },
+      "amount_usd_range": [0.10, 0.15],
+      "points_if_success": [20, 35],
+      "loss_points_if_fail": [15, 25],
+      "success_msgs": [
+        "It was risky, but worth it — you walked away with {loot} {token}.",
+        "You kept your cool under pressure and took home {loot} {token}.",
+        "With nerves of steel, you made off with {loot} {token}."
+      ],
+      "fail_msgs": [
+        "Gun jammed. You had to retreat empty-handed.",
+        "Someone tackled you near the exit. Game over.",
+        "Too many witnesses — you aborted just in time."
+      ]
+    },
+    "bankjob": {
+      "title": "Bank Job",
+      "min_role": "Captain",
+      "difficulty": "Very Hard",
+      "stamina_cost": 6,
+      "recommended_strength": 600,
+      "token_drops": { "min": 1, "max": 2 },
+      "amount_usd_range": [0.15, 0.20],
+      "points_if_success": [30, 50],
+      "loss_points_if_fail": [25, 40],
+      "success_msgs": [
+        "The vault cracked open and you secured {loot} {token}. Big win!",
+        "Flawless execution — {loot} {token} added to your empire.",
+        "Everything went according to plan. {loot} {token} now yours."
+      ],
+      "fail_msgs": [
+        "The manager stalled too long. You ran out of time.",
+        "SWAT showed up quicker than expected.",
+        "A hidden security door locked you out."
+      ]
+    },
+    "armoredtruck": {
+      "title": "Armored Truck",
+      "min_role": "General",
+      "difficulty": "Brutal",
+      "stamina_cost": 7,
+      "recommended_strength": 750,
+      "token_drops": { "min": 2, "max": 2 },
+      "amount_usd_range": [0.20, 0.30],
+      "points_if_success": [40, 60],
+      "loss_points_if_fail": [30, 50],
+      "success_msgs": [
+        "You blasted the truck open and scored {loot} {token}!",
+        "Ambush success! You seized {loot} {token} from the armored truck.",
+        "Clean hit. The truck never saw it coming. {loot} {token} is yours."
+      ],
+      "fail_msgs": [
+        "The truck was a decoy. You were nearly caught.",
+        "You jammed the route too late — truck got away.",
+        "Explosives failed. The crew had to retreat."
+      ]
+    },
+    "drugshipment": {
+      "title": "Drug Shipment",
+      "min_role": "Gang Leader",
+      "difficulty": "Extreme",
+      "stamina_cost": 8,
+      "recommended_strength": 1000,
+      "token_drops": { "min": 2, "max": 3 },
+      "amount_usd_range": [0.30, 0.50],
+      "points_if_success": [50, 75],
+      "loss_points_if_fail": [40, 60],
+      "success_msgs": [
+        "You intercepted the shipment and moved it fast — {loot} {token} gained.",
+        "Risky run, huge reward. {loot} {token} worth of product secured.",
+        "The handoff was clean. {loot} {token} added to your stash."
+      ],
+      "fail_msgs": [
+        "DEA was watching. You barely escaped.",
+        "Someone snitched. The drop never happened.",
+        "Wrong coordinates. Shipment never arrived."
+      ]
+    },
+    "syndicate": {
+      "title": "Syndicate Treasury",
+      "min_role": "Boss",
+      "difficulty": "Insane",
+      "stamina_cost": 9,
+      "recommended_strength": 3000,
+      "token_drops": { "min": 2, "max": 3 },
+      "amount_usd_range": [0.50, 0.75],
+      "points_if_success": [60, 80],
+      "loss_points_if_fail": [50, 70],
+      "success_msgs": [
+        "A high-stakes move paid off — you pocketed {loot} {token}.",
+        "Elite coordination. You pulled in {loot} {token}.",
+        "The Syndicate never knew what hit them. {loot} {token} secured."
+      ],
+      "fail_msgs": [
+        "One of your crew flipped. You lost everything.",
+        "Intel was wrong. You walked into a trap.",
+        "A rival gang interfered. The plan collapsed."
+      ]
+    },
+    "empirejob": {
+      "title": "The Empire Job",
+      "min_role": "Immortal",
+      "difficulty": "Mythic",
+      "stamina_cost": 10,
+      "recommended_strength": 5000,
+      "token_drops": { "min": 3, "max": 4 },
+      "amount_usd_range": [0.75, 1.00],
+      "points_if_success": [75, 100],
+      "loss_points_if_fail": [60, 90],
+      "success_msgs": [
+        "A once-in-a-generation hit — {loot} {token} flows into your coffers.",
+        "You orchestrated the impossible. {loot} {token} says it all.",
+        "Empire-level payday: {loot} {token} secured across multiple vaults."
+      ],
+      "fail_msgs": [
+        "The city turned against you — everything collapsed at the last minute.",
+        "Too many moving parts. A single misstep cost the whole score.",
+        "Your rivals sabotaged the plan. You'll get them next time."
+      ]
+    }
+  }
+}

@@ -1,0 +1,37 @@
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import Navbar from "./components/Navbar";
+import CrooksFinance from "./pages/CrooksFinance";
+import CrooksEmpire from "./pages/CrooksEmpire";
+import EmpireArmory from "./pages/EmpireArmory";
+import CrooksLegends from "./pages/CrooksLegends";
+import EmpireProfile from "./pages/EmpireProfile";
+import EmpireBank from "./pages/EmpireBank.jsx";
+import EmpireHeists from "./pages/EmpireHeists.jsx";
+import { WalletProvider } from "./context/WalletContext";
+
+
+export default function App() {
+  return (
+    <WalletProvider>
+        <BrowserRouter>
+        <Navbar />
+        {/* ruimte onder de fixed navbar */}
+        <div className="pt-16">
+            <Routes>
+            <Route path="/" element={<CrooksFinance />} />
+            <Route path="/legends" element={<CrooksLegends />} />
+            <Route path="/empire" element={<CrooksEmpire />} />
+            <Route path="/empire/armory" element={<EmpireArmory />} />
+            <Route path="/empire/profile" element={<EmpireProfile />} />
+            <Route path="/empire/bank" element={<EmpireBank />} />
+            <Route path="/empire/heists" element={<EmpireHeists />} />
+            {/* stubs so tiles don’t 404 */}
+            <Route path="/empire/bank" element={<div />} />
+            <Route path="/empire/heists" element={<div />} />
+            <Route path="/empire/casino" element={<div />} />
+                    </Routes>
+        </div>
+        </BrowserRouter>
+    </WalletProvider>
+  );
+}

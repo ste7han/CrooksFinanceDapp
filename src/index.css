@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background-color: #000;
+  color: #fff;
+  font-family: system-ui, sans-serif;
+}
+.skeleton {
+  animation: pulse 1.2s ease-in-out infinite;
+  background: linear-gradient(90deg, rgba(255,255,255,0.08), rgba(255,255,255,0.15), rgba(255,255,255,0.08));
+  background-size: 200% 100%;
+}
+@keyframes pulse {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* skeleton shimmer */
+.skeleton {
+  position: relative;
+  background: rgba(255,255,255,0.06);
+  overflow: hidden;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+  animation: shimmer 1.6s infinite;
+}
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* subtiele scrollbars (WebKit) */
+*::-webkit-scrollbar { height: 8px; width: 8px; }
+*::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 999px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes bg-pan {
+  0% { background-position: 50% 50%; }
+  50% { background-position: 52% 48%; }
+  100% { background-position: 50% 50%; }
+}
+.bg-animated {
+  animation: bg-pan 15s ease-in-out infinite;
+}
