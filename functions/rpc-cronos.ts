@@ -1,9 +1,7 @@
-export const onRequest: PagesFunction = async (ctx) => {
-  const target = "https://rpc.ankr.com/cronos";
+export const onRequest: PagesFunction = async ({ request }) => {
+  const target = "https://evm.cronos.org/"; // ⬅️ switch van ankr → cronos
 
-  const req = ctx.request;
-  // CORS preflight
-  if (req.method === "OPTIONS") {
+  if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
       headers: {
@@ -14,11 +12,13 @@ export const onRequest: PagesFunction = async (ctx) => {
     });
   }
 
-  // Forward JSON-RPC (meestal POST)
   const init: RequestInit = {
-    method: req.method,
+    method: request.method,
     headers: { "content-type": "application/json" },
-    body: req.method === "POST" ? await req.text() : undefined,
+    body: request.method === "POST" ? await request.text() : undefined,
+    // keepalive kan helpen bij snellere closes:
+    // @ts-ignore
+    keepalive: true,
   };
 
   const upstream = await fetch(target, init);
