@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
 import { Link } from "react-router-dom";
 import heistsData from "../data/heists.json";
-import { runHeist } from "../game/HeistEngine";
+import { runHeist } from "../game/heistEngine.js";
 import { useWallet } from "../context/WalletContext";
 import { useEmpire } from "../context/EmpireContext";
 
