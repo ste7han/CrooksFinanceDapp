@@ -33,3 +33,5 @@ export function getEbisuSocket() {
 
   return socket;
 }
+
+if (typeof window !== "undefined") window.getEbisuSocket = getEbisuSocket;
