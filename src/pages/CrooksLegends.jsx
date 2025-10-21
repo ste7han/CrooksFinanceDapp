@@ -547,31 +547,7 @@ export default function CrooksRewardsDapp() {
   const [ebisuFeed, setEbisuFeed] = useState([]);
   const { provider, signer, address, networkOk } = useWallet();
 
-  // 🔂 Load the most recent 4 sales on first render
-useEffect(() => {
-  const addr = NFT_ADDRESS.toLowerCase();
-  if (!RECENT_BASE) return;
 
-  (async () => {
-    try {
-      const u = new URL(RECENT_BASE, location.origin);
-      u.searchParams.set("addr", addr);
-      u.searchParams.set("limit", "4");
-      const res = await fetch(u.toString(), { cache: "no-store" });
-      if (!res.ok) return;
-      const json = await res.json();
-
-      const normalized = (Array.isArray(json) ? json : [])
-        .map((ev) => normalizeEbisuEvent(ev?.type || "Sold", ev))
-        .filter(Boolean)
-        .sort((a, b) => (b.time || 0) - (a.time || 0));
-
-      pushManyToFeed(setEbisuFeed, normalized, FEED_LIMIT);
-    } catch (e) {
-      console.warn("[ebisus] recent fetch failed", e);
-    }
-  })();
-}, []);
 
   // 🔁 LIVE MARKET FEED (SSE via local relay)
   useEffect(() => {
