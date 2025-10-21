@@ -1,69 +1,67 @@
-// functions/moralis-wallet.ts
-// POST /moralis-wallet?owner=0x...&cursor=...
-export const onRequestPost: PagesFunction = async ({ request, env }) => {
+export const onRequest: PagesFunction = async (context) => {
+  const { request, env } = context;
+
+  // ===== Debug: laat in de CF logs zien of de key binnenkomt =====
+  console.log("MORALIS_KEY seen?", !!env.MORALIS_KEY);
+
+  // Query params
   const url = new URL(request.url);
-  const owner = url.searchParams.get("owner");
-  const cursor = url.searchParams.get("cursor") || "";
-  if (!owner) return new Response('{"error":"owner required"}', { status: 400 });
+  const owner = url.searchParams.get("owner")?.trim() || "";
+  const cursor = url.searchParams.get("cursor")?.trim() || "";
 
-  // Simple in-memory rate limit per worker instance (1 minute window)
-  const ip = request.headers.get("cf-connecting-ip") || "0.0.0.0";
-  // @ts-ignore
-  globalThis.__hits ||= new Map<string, { count: number; ts: number }>();
-  // @ts-ignore
-  const rec = globalThis.__hits.get(ip) || { count: 0, ts: Date.now() };
-  const now = Date.now();
-  if (now - rec.ts > 60_000) { rec.count = 0; rec.ts = now; }
-  rec.count += 1;
-  // @ts-ignore
-  globalThis.__hits.set(ip, rec);
-  if (rec.count > 60) return new Response('{"error":"rate limit"}', { status: 429 });
-
-  const apiKey = env.MORALIS_KEY as string;
-  const target = new URL(`https://deep-index.moralis.io/api/v2.2/${owner}/nft`);
-  target.searchParams.set("chain", "cronos");
-  target.searchParams.set("format", "decimal");
-  target.searchParams.set("limit", "100");
-  target.searchParams.set("normalizeMetadata", "true");
-  target.searchParams.set("media_items", "true");
-  // NOTE: we pass the collection address from the client (safe)
-  const body = await request.text();
-  let token_addresses = "";
-  try { token_addresses = JSON.parse(body)?.token_addresses || ""; } catch {}
-  if (token_addresses) target.searchParams.set("token_addresses", token_addresses);
-  if (cursor) target.searchParams.set("cursor", cursor);
-
-  // Edge cache by URL (owner + cursor + collection)
-  const cache = caches.default;
-  const cacheKey = new Request(target.toString(), { method: "GET" });
-  const cached = await cache.match(cacheKey);
-  if (cached) {
-    return new Response(await cached.text(), {
-      status: cached.status,
-      headers: {
-        "content-type": cached.headers.get("content-type") || "application/json",
-        "access-control-allow-origin": "*",
-      },
+  if (!owner) {
+    return new Response(JSON.stringify({ error: "Missing owner" }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
     });
   }
 
-  console.log("ENV DEBUG", { hasKey: !!env.MORALIS_KEY, len: env.MORALIS_KEY?.length });
+  // Body (optioneel) voor token_addresses
+  let body: any = {};
+  try { body = await request.json(); } catch {}
 
-  const resp = await fetch(target.toString(), {
-    headers: { "X-API-Key": apiKey },
-  });
-  const txt = await resp.text();
+  const token_addresses = (body?.token_addresses ?? "").toString().trim();
 
-  const out = new Response(txt, {
-    status: resp.status,
+  // Zorg dat de secret er is
+  const apiKey = env.MORALIS_KEY;
+  if (!apiKey) {
+    // 401 hier = server heeft geen key → check env bindings
+    return new Response(JSON.stringify({ error: "MORALIS_KEY missing on server" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  // Bouw Moralis URL
+  const moralisBase = "https://deep-index.moralis.io/api/v2.2";
+  const moralisUrl = new URL(`${moralisBase}/${owner}/nft`);
+  moralisUrl.searchParams.set("chain", "cronos");
+  moralisUrl.searchParams.set("format", "decimal");
+  moralisUrl.searchParams.set("limit", "100");
+  moralisUrl.searchParams.set("normalizeMetadata", "true");
+  moralisUrl.searchParams.set("media_items", "true");
+  if (token_addresses) moralisUrl.searchParams.set("token_addresses", token_addresses);
+  if (cursor) moralisUrl.searchParams.set("cursor", cursor);
+
+  // Proxy call -> Moralis
+  const resp = await fetch(moralisUrl.toString(), {
     headers: {
-      "content-type": resp.headers.get("content-type") || "application/json",
-      "access-control-allow-origin": "*",
-      // cache successful pages for 2 minutes
-      "cache-control": resp.ok ? "public, max-age=120" : "no-store",
+      "X-API-Key": apiKey,
     },
   });
 
-  if (resp.ok) await cache.put(cacheKey, out.clone());
-  return out;
+  // Als je ooit CU-limit raakt, geeft Moralis hier 429 terug (niet 401)
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    return new Response(
+      JSON.stringify({ error: "Moralis upstream error", status: resp.status, text }),
+      { status: resp.status, headers: { "content-type": "application/json" } }
+    );
+  }
+
+  const json = await resp.json();
+  return new Response(JSON.stringify(json), {
+    status: 200,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  });
 };
