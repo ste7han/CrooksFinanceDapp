@@ -42,6 +42,7 @@ const STAKE = {
   PPFT_STAKE:    (import.meta.env.VITE_STAKE_PPFT    || "").trim(),
   VNO_STAKE:     (import.meta.env.VITE_STAKE_VNO     || "").trim(),
   KACHING_VAULT: (import.meta.env.VITE_STAKE_KACHING_VAULT || "").trim(),
+  KACHING_CHEF:  (import.meta.env.VITE_STAKE_KACHING_CHEF  || "").trim(),
 };
 
 // helper: only add adapter if we have both a staking contract AND a token address in TRACKED_TOKENS
@@ -100,6 +101,13 @@ const STAKING_ADAPTERS = [
   ...maybeStakeAdapter("CORGIAI", "CORGIAI", STAKE.CORGIAI_STAKE),
   ...maybeStakeAdapter("PPFT",    "PPFT",    STAKE.PPFT_STAKE),
   ...maybeStakeAdapter("VNO",     "VNO",     STAKE.VNO_STAKE),
+
+...(STAKE.KACHING_CHEF ? [{
+  label: "KACHING Farm",
+  type: "chef",                  // our code handles userInfo(address) and pid fallback
+  contract: STAKE.KACHING_CHEF,
+  asset: { symbol: "KACHING", address: TRACKED_TOKENS.KACHING, decimals: 18 },
+}] : []),
 
 ...(STAKE.KACHING_VAULT ? [{
   label: "KACHING Vault",
