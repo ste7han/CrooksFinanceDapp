@@ -41,7 +41,8 @@ const STAKE = {
   CORGIAI_STAKE: (import.meta.env.VITE_STAKE_CORGIAI || "").trim(),
   PPFT_STAKE:    (import.meta.env.VITE_STAKE_PPFT    || "").trim(),
   VNO_STAKE:     (import.meta.env.VITE_STAKE_VNO     || "").trim(),
-  KACHING_STAKE: (import.meta.env.VITE_STAKE_KACHING || "").trim(),
+  KACHING_CHEF:  (import.meta.env.VITE_STAKE_KACHING_CHEF || "").trim(),
+  KACHING_POOLID: Number(import.meta.env.VITE_STAKE_KACHING_POOLID ?? 0),
 };
 
 // helper: only add adapter if we have both a staking contract AND a token address in TRACKED_TOKENS
@@ -100,7 +101,15 @@ const STAKING_ADAPTERS = [
   ...maybeStakeAdapter("CORGIAI", "CORGIAI", STAKE.CORGIAI_STAKE),
   ...maybeStakeAdapter("PPFT",    "PPFT",    STAKE.PPFT_STAKE),
   ...maybeStakeAdapter("VNO",     "VNO",     STAKE.VNO_STAKE),
-  ...maybeStakeAdapter("KACHING", "KACHING", STAKE.KACHING_STAKE),
+
+  // KACHING — Chef farm
+  ...(STAKE.KACHING_CHEF ? [{
+    label: "KACHING Farm",
+    type: "chef",
+    contract: STAKE.KACHING_CHEF,
+    poolId: STAKE.KACHING_POOLID || 0,
+    asset: { symbol: "KACHING", address: TRACKED_TOKENS.KACHING, decimals: 18 },
+  }] : []),
 ];
 
 // DEV: log what Vite sees (only in dev)
