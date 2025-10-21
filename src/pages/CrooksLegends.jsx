@@ -596,7 +596,7 @@ useEffect(() => {
   console.debug("[ebisus] raw event received:", type, data);
 
   // ✅ fix: forceer plain object
-  const json = JSON.parse(JSON.stringify(data));
+  const json = typeof structuredClone === "function" ? structuredClone(data) : JSON.parse(JSON.stringify(data));
 
   const nftAddr =
     json?.nft?.nftAddress?.toLowerCase?.() ||
@@ -614,6 +614,12 @@ useEffect(() => {
   } else {
     console.debug("[ebisus] 🚫 ignored event for other addr:", nftAddr || "<empty>");
   }
+  console.debug("[ebisus] typeof data:", typeof data);
+  console.debug("[ebisus] keys:", Object.keys(data || {}));
+  console.debug("[ebisus] nftAddress (top):", data?.nftAddress);
+  console.debug("[ebisus] nft?.nftAddress:", data?.nft?.nftAddress);
+  console.debug("[ebisus] full nft:", data?.nft);
+
 };
 
 
