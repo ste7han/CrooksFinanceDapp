@@ -591,7 +591,17 @@ useEffect(() => {
   const socket = getEbisuSocket();
 
   const handleEvent = (type) => (msg) => {
-  const data = msg?.event ? msg.event : msg;
+    let data = msg?.event ? msg.event : msg;
+
+    // Als het een string is (zoals nu), parse het
+    if (typeof data === "string") {
+      try {
+        data = JSON.parse(data);
+      } catch (e) {
+        console.warn("[ebisus] ⚠️ kon data niet parsen:", e, data);
+        return;
+      }
+    }
 
   console.debug("[ebisus] raw event received:", type, data);
 
