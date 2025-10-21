@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
-import { getEbisuSocket } from "../lib/ebisusSocket";
 import { useWallet } from "../context/WalletContext";
 
 // Keep a small rolling feed
@@ -46,13 +45,6 @@ function timeAgo(sec) {
  */
 
 // ===== Chain config =====
-const CRONOS_PARAMS = {
-  chainId: "0x19",
-  chainName: "Cronos Mainnet",
-  nativeCurrency: { name: "CRO", symbol: "CRO", decimals: 18 },
-  rpcUrls: ["https://evm.cronos.org"],
-  blockExplorerUrls: ["https://cronoscan.com"],
-};
 
 const DISTRIBUTOR_ADDRESS = "0x622d5BD30deCe7e12743E988b844bce4AFF0294c";
 const NFT_ADDRESS = "0x44102b7ab3e2b8edf77d188cd2b173ecbda60967";
@@ -203,14 +195,11 @@ const PENDING_CONCURRENCY = 2;
 const PENDING_BATCH_PAUSE_MS = 300;
 const OWNEROF_CONCURRENCY = 5;
 const OWNEROF_BATCH_DELAY_MS = 450;
-const BLOCK_CHUNK = 10_000n;
-const START_BLOCK_HINT = 5_677_593n;
 const TOKENIMAGE_CONCURRENCY = 4;
 const EBISUS_LINK =
   "https://app.ebisusbay.com/collection/cronos/crooks-legends?chain=cronos";
 
 // ===== Small utilities =====
-const MORALIS_BASE = "https://deep-index.moralis.io/api/v2.2";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "");
 const formatUnits = (v, d) => {
@@ -298,68 +287,38 @@ function loadCache(key, maxAgeMs = 60 * 60 * 1000) {
     return null;
   }
 }
-async function moralisFetch(url, opts, tries = 4) {
-  for (let i = 0; i < tries; i++) {
-    try {
-      const res = await fetch(url, opts);
-      if (res.ok) return res.json();
-    } catch {}
-    await sleep(300 * Math.pow(2, i));
-  }
-  return null;
-}
+
 
 async function discoverOwnedViaMoralis(owner, weights) {
-  const apiKey = import.meta.env.VITE_MORALIS_KEY;
-  if (!apiKey) return null;
+  // No public key needed anymore; we use our server proxy.
+  if (!owner) return null;
 
   const cacheKey = moralisCacheKey(owner, weights?.root);
   const cached = loadCache(cacheKey);
   if (cached) {
-    const filtered = cached
-      .filter((id) => !!weights?.tokens?.[String(id)])
-      .sort((a, b) => a - b);
+    const filtered = cached.filter((id) => !!weights?.tokens?.[String(id)]).sort((a, b) => a - b);
     return { ids: filtered, images: {} };
   }
 
-  let cursor = null;
-  const pageLimit = 100;
+  let cursor = "";
   const ids = [];
   const images = {};
+  // Hard cap pages to protect CU (bump later if needed)
+  const MAX_PAGES = 5;
 
-  for (let page = 0; page < 20; page++) {
-    const url = new URL(`${MORALIS_BASE}/${owner}/nft`);
-    url.searchParams.set("chain", "cronos");
-    url.searchParams.set("format", "decimal");
-    url.searchParams.set("limit", String(pageLimit));
-    url.searchParams.set("token_addresses", NFT_ADDRESS);
-    url.searchParams.set("normalizeMetadata", "true");
-    url.searchParams.set("media_items", "true");
-    if (cursor) url.searchParams.set("cursor", cursor);
-
-    const data = await moralisFetch(url.toString(), {
-      headers: { "X-API-Key": apiKey },
-    });
-    if (!data || !Array.isArray(data.result)) break;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const data = await moralisProxyPage(owner, { cursor, collection: NFT_ADDRESS });
+    if (!data || !Array.isArray(data.result) || data.result.length === 0) break;
 
     for (const r of data.result) {
       const n = Number(r.token_id);
       if (!Number.isFinite(n)) continue;
 
-      let image = null;
-      if (r.normalized_metadata?.image) image = r.normalized_metadata.image;
-      if (!image && Array.isArray(r.media) && r.media.length) {
-        image =
-          r.media[0].gateway_media_url ||
-          r.media[0].original_media_url ||
-          null;
-      }
-      if (!image) {
-        try {
-          const meta = r.metadata ? JSON.parse(r.metadata) : null;
-          image = meta?.image || meta?.image_url || meta?.animation_url || null;
-        } catch {}
-      }
+      // extract image once
+      let image = r.normalized_metadata?.image
+        || (Array.isArray(r.media) && r.media[0] && (r.media[0].gateway_media_url || r.media[0].original_media_url))
+        || (() => { try { const meta = r.metadata ? JSON.parse(r.metadata) : null; return meta?.image || meta?.image_url || meta?.animation_url || null; } catch { return null; } })();
+
       if (image) images[n] = resolveMediaUrl(image);
       ids.push(n);
     }
@@ -377,6 +336,7 @@ async function discoverOwnedViaMoralis(owner, weights) {
 
   return { ids: filtered, images: filteredImages };
 }
+
 
 async function ownerOfSafe(c, id) {
   try {
@@ -417,57 +377,6 @@ async function discoverOwnedViaOwnerOf(nftReadOnly, owner, weights) {
   return Array.from(found).sort((a, b) => a - b);
 }
 
-async function hydrateImagesViaMoralisWalletView(owner, setTokenImages) {
-  const apiKey = import.meta.env.VITE_MORALIS_KEY;
-  if (!apiKey || !owner) return;
-
-  let cursor = null;
-  const pageLimit = 100;
-  const images = {};
-
-  for (let page = 0; page < 10; page++) {
-    const url = new URL(`${MORALIS_BASE}/${owner}/nft`);
-    url.searchParams.set("chain", "cronos");
-    url.searchParams.set("format", "decimal");
-    url.searchParams.set("limit", String(pageLimit));
-    url.searchParams.set("token_addresses", NFT_ADDRESS);
-    url.searchParams.set("normalizeMetadata", "true");
-    url.searchParams.set("media_items", "true");
-    if (cursor) url.searchParams.set("cursor", cursor);
-
-    const data = await moralisFetch(url.toString(), {
-      headers: { "X-API-Key": apiKey },
-    });
-    if (!data || !Array.isArray(data.result)) break;
-
-    for (const r of data.result) {
-      const n = Number(r.token_id);
-      if (!Number.isFinite(n)) continue;
-
-      let image = null;
-      if (r.normalized_metadata?.image) image = r.normalized_metadata.image;
-      if (!image && Array.isArray(r.media) && r.media.length) {
-        image =
-          r.media[0].gateway_media_url ||
-          r.media[0].original_media_url ||
-          null;
-      }
-      if (!image) {
-        try {
-          const meta = r.metadata ? JSON.parse(r.metadata) : null;
-          image = meta?.image || meta?.image_url || meta?.animation_url || null;
-        } catch {}
-      }
-      if (image) images[n] = resolveMediaUrl(image);
-    }
-
-    if (!data.cursor) break;
-    cursor = data.cursor;
-  }
-
-  if (Object.keys(images).length)
-    setTokenImages((prev) => ({ ...prev, ...images }));
-}
 
 async function hydrateImagesViaTokenURI(nftReadOnly, ids, setTokenImages) {
   if (!nftReadOnly || !ids?.length) return;
@@ -513,6 +422,41 @@ async function hydrateImagesViaTokenURI(nftReadOnly, ids, setTokenImages) {
     setTokenImages((prev) => ({ ...prev, ...update }));
   }
 }
+
+// Use our server endpoint instead of calling Moralis from the browser
+const MORALIS_PROXY = "/moralis-wallet";
+
+// Small wrapper with backoff + session cache to save CU
+async function moralisProxyPage(owner, { cursor = "", collection = null } = {}) {
+  const u = new URL(MORALIS_PROXY, location.origin);
+  u.searchParams.set("owner", owner);
+  if (cursor) u.searchParams.set("cursor", cursor);
+
+  // sessionStorage cache (owner+cursor+collection)
+  const cacheKey = `mrl:${owner}:${collection || ""}:${cursor}`;
+  const cached = sessionStorage.getItem(cacheKey);
+  if (cached) {
+    try { return JSON.parse(cached); } catch {}
+  }
+
+  const resp = await fetch(u.toString(), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token_addresses: collection || "" }),
+  });
+
+  // gentle backoff if 429
+  if (resp.status === 429) {
+    await new Promise(r => setTimeout(r, 800));
+    return moralisProxyPage(owner, { cursor, collection });
+  }
+  if (!resp.ok) return null;
+
+  const json = await resp.json();
+  try { sessionStorage.setItem(cacheKey, JSON.stringify(json)); } catch {}
+  return json;
+}
+
 
 export default function CrooksRewardsDapp() {
   const [ranksById, setRanksById] = useState({});
@@ -776,9 +720,6 @@ export default function CrooksRewardsDapp() {
           .catch(() => true);
         if (supportsMetadata) {
           await hydrateImagesViaTokenURI(nftReadOnly, ids, setTokenImages);
-        }
-        if (import.meta.env.VITE_MORALIS_KEY) {
-          await hydrateImagesViaMoralisWalletView(address, setTokenImages);
         }
 
         const missingForBase = ids.filter((id) => !tokenImages[id]);
@@ -1463,7 +1404,7 @@ export default function CrooksRewardsDapp() {
         <footer className="mt-10 text-center text-xs opacity-70">
           <p>
             Tip: host <code>weights.json</code> in <code>/public</code> en controleer dat <code>root</code> en <code>totalWeight</code> overeenkomen met on-chain.
-            Zet <code>VITE_MORALIS_KEY</code> in <code>.env</code> voor snelle discovery (later, optioneel).
+            Moralis-requests lopen via de server-proxy <code>/moralis-wallet</code> met je Cloudflare secret <code>MORALIS_KEY</code> (geen publieke API key in de browser). Edge-caching beperkt het CU-verbruik.
           </p>
         </footer>
       </div>
