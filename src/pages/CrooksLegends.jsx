@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
 import { useWallet } from "../context/WalletContext";
-import { getEbisuSocket } from "@/lib/ebisusSocket";
+import { getEbisuSocket } from "../lib/ebisusSocket";
 
 // Keep a small rolling feed
 const FEED_LIMIT = 12;
