@@ -1,35 +1,52 @@
-export const onRequest: PagesFunction = async ({ request }) => {
-  const target = "https://evm.cronos.org/"; // ⬅️ switch van ankr → cronos
+// Place this file as: /functions/rpc.ts  (-> route: /rpc)
+// or                /functions/rpc-cronos.ts (-> route: /rpc-cronos)
 
-  if (request.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "*",
-        "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-      },
-    });
-  }
+function getTarget(env: any) {
+  const raw = (env?.CRONOS_RPC_URL || "https://evm.cronos.org").trim();
+  // avoid trailing slash; some JSON-RPC servers are picky
+  return raw.replace(/\/+$/, "");
+}
 
-  const init: RequestInit = {
-    method: request.method,
-    headers: { "content-type": "application/json" },
-    body: request.method === "POST" ? await request.text() : undefined,
-    // keepalive kan helpen bij snellere closes:
-    // @ts-ignore
-    keepalive: true,
-  };
+// --- CORS helpers ---
+const corsBase = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "content-type, x-requested-with, *",
+  "Access-Control-Allow-Methods": "POST,OPTIONS,GET",
+  "Cache-Control": "no-store",
+};
 
-  const upstream = await fetch(target, init);
-  const body = await upstream.text();
+export const onRequestOptions: PagesFunction = async () =>
+  new Response(null, { status: 204, headers: corsBase });
 
-  return new Response(body, {
-    status: upstream.status,
-    headers: {
-      "content-type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-      "Cache-Control": "no-store",
-    },
+export const onRequestGet: PagesFunction = async ({ env }) => {
+  const target = getTarget(env);
+  return new Response(JSON.stringify({ ok: true, upstream: target }), {
+    status: 200,
+    headers: { ...corsBase, "content-type": "application/json" },
   });
 };
+
+export const onRequestPost: PagesFunction = async ({ request, env }) => {
+  const target = getTarget(env);
+
+  // Read raw body once (JSON-RPC)
+  const bodyText = await request.text();
+
+  const upstream = await fetch(target, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: bodyText,
+    // @ts-ignore
+    keepalive: true,
+  });
+
+  const text = await upstream.text(); // pass-through
+
+  return new Response(text, {
+    status: upstream.status,
+    headers: { ...corsBase, "content-type": "application/json" },
+  });
+};
+
+// Optional: catch-all (only if you kept export onRequest* above)
+// export const onRequest: PagesFunction = onRequestPost;
