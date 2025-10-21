@@ -591,29 +591,62 @@ useEffect(() => {
   const socket = getEbisuSocket();
 
   const handleEvent = (type) => (data) => {
-  const nftAddr = (data?.nft?.nftAddress || data?.nftAddress || "").toLowerCase();
-  console.debug("[ebisus] incoming event:", type, nftAddr, data);
-  console.debug("[ebisus] target addr:", addr);
-  if (nftAddr === addr) {
-    console.debug("[ebisus] MATCH — pushing to feed", type, data);
-    addToFeed(setEbisuFeed, normalizeEbisuEvent(type, data));
-  } else {
-    console.debug("[ebisus] ignored event for other addr:", nftAddr);
-  }
-};
+    // Defensive extraction: check all possible spots + case variations
+    const nftAddr =
+      (data?.nft?.nftAddress ||
+        data?.nft?.address ||
+        data?.nftAddress ||
+        data?.collectionAddress ||
+        data?.address ||
+        "")?.toString()
+        .trim()
+        .toLowerCase();
 
-  // Listen to all relevant events (case-insensitive)
-  ["Listed", "listed", "Sold", "sold", "OfferMade", "offerMade", "CollectionOfferMade", "collectionOfferMade"]
-    .forEach(ev => socket.on(ev, handleEvent(ev)));
+    console.debug("[ebisus] incoming event:", type, nftAddr || "<empty>", data);
+    console.debug("[ebisus] target addr:", addr);
+
+    // Match even if prefixed or partial (handles `cronos:0x...`)
+    if (nftAddr && (nftAddr === addr || nftAddr.endsWith(addr))) {
+      console.debug("[ebisus] ✅ MATCH — pushing to feed", type, data);
+      const normalized = normalizeEbisuEvent(type, data);
+      console.debug("[ebisus] normalized →", normalized);
+      addToFeed(setEbisuFeed, normalized);
+    } else {
+      console.debug("[ebisus] 🚫 ignored event for other addr:", nftAddr);
+    }
+  };
+
+  // Listen for all relevant events
+  [
+    "Listed",
+    "listed",
+    "Sold",
+    "sold",
+    "OfferMade",
+    "offerMade",
+    "CollectionOfferMade",
+    "collectionOfferMade",
+  ].forEach((ev) => socket.on(ev, handleEvent(ev)));
 
   socket.on("connect", () => console.debug("[ebisus] connected to live feed"));
-  socket.on("disconnect", () => console.debug("[ebisus] disconnected from live feed"));
+  socket.on("disconnect", () =>
+    console.debug("[ebisus] disconnected from live feed")
+  );
 
   return () => {
-    ["Listed", "listed", "Sold", "sold", "OfferMade", "offerMade", "CollectionOfferMade", "collectionOfferMade"]
-      .forEach(ev => socket.off(ev));
+    [
+      "Listed",
+      "listed",
+      "Sold",
+      "sold",
+      "OfferMade",
+      "offerMade",
+      "CollectionOfferMade",
+      "collectionOfferMade",
+    ].forEach((ev) => socket.off(ev));
   };
 }, []);
+
 
 
   // Read-only RPC via env; valt terug op wallet provider
