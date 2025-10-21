@@ -456,7 +456,15 @@ function normalizeEbisuEvent(type, ev) {
     ev?.nftId ?? ev?.tokenId ?? ev?.edition ?? nft?.nftId ?? nft?.tokenId ?? nft?.edition ?? ""
   );
   const addrRaw = nft?.nftAddress || ev?.nftAddress || "";
-  const ts = Number(ev?.saleTime ?? ev?.listingTime ?? ev?.time ?? 0);
+  const ts = Number(
+    ev?.saleTime ??
+    ev?.listingTime ??
+    ev?.time ??
+    ev?.event?.blockTimestamp ??
+    ev?.event?.time ??
+    Date.now() / 1000
+  );
+
   const permalink =
     nft?.market_uri ||
     (addrRaw && rawId ? `https://app.ebisusbay.com/collection/${addrRaw}/${rawId}` : "");
