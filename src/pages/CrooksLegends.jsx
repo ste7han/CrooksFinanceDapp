@@ -591,32 +591,38 @@ useEffect(() => {
   const socket = getEbisuSocket();
 
   const handleEvent = (type) => (data) => {
-    // Defensive extraction: check all possible spots + case variations
-    const nftAddr =
-      (data?.nft?.nftAddress ||
-        data?.nft?.address ||
-        data?.nftAddress ||
-        data?.collectionAddress ||
-        data?.address ||
-        "")?.toString()
-        .trim()
-        .toLowerCase();
+    // dump out all possible keys so we see what Ebisu actually sends
+    console.debug("[ebisus] raw event received:", type, data);
 
-    console.debug("[ebisus] incoming event:", type, nftAddr || "<empty>", data);
+    const possible = {
+      nftDotNftAddress: data?.nft?.nftAddress,
+      nftDotAddress: data?.nft?.address,
+      nftAddress: data?.nftAddress,
+      collectionAddress: data?.collectionAddress,
+      address: data?.address,
+    };
+
+    console.debug("[ebisus] address fields:", possible);
+
+    // pick the first that is a string
+    const rawAddr = Object.values(possible).find(
+      (v) => typeof v === "string" && v.trim().startsWith("0x")
+    );
+
+    const nftAddr = rawAddr ? rawAddr.trim().toLowerCase() : "";
+    console.debug("[ebisus] extracted nftAddr:", nftAddr || "<empty>");
     console.debug("[ebisus] target addr:", addr);
 
-    // Match even if prefixed or partial (handles `cronos:0x...`)
     if (nftAddr && (nftAddr === addr || nftAddr.endsWith(addr))) {
       console.debug("[ebisus] ✅ MATCH — pushing to feed", type, data);
       const normalized = normalizeEbisuEvent(type, data);
       console.debug("[ebisus] normalized →", normalized);
       addToFeed(setEbisuFeed, normalized);
     } else {
-      console.debug("[ebisus] 🚫 ignored event for other addr:", nftAddr);
+      console.debug("[ebisus] 🚫 ignored event for other addr:", nftAddr || "<empty>");
     }
   };
 
-  // Listen for all relevant events
   [
     "Listed",
     "listed",
@@ -646,6 +652,7 @@ useEffect(() => {
     ].forEach((ev) => socket.off(ev));
   };
 }, []);
+
 
 
 
