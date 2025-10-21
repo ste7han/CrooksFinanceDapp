@@ -129,7 +129,8 @@ if (import.meta.env.DEV) {
     VITE_STAKE_CORGIAI:         import.meta.env.VITE_STAKE_CORGIAI,
     VITE_STAKE_PPFT:            import.meta.env.VITE_STAKE_PPFT,
     VITE_STAKE_VNO:             import.meta.env.VITE_STAKE_VNO,
-    VITE_STAKE_KACHING_VAULT:   import.meta.env.VITE_STAKE_KACHING_VAULT,
+    VITE_STAKE_KACHING_VAULT: import.meta.env.VITE_STAKE_KACHING_VAULT,
+    VITE_STAKE_KACHING_CHEF:  import.meta.env.VITE_STAKE_KACHING_CHEF,
   });
   console.debug("[CrooksFinance] STAKING_ADAPTERS:", STAKING_ADAPTERS);
 }
