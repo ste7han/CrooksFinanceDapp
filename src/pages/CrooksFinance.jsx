@@ -134,19 +134,32 @@ const CRONOS_EXPLORER_PATHS = (addr) => [
 
 async function fetchMoralisTokenData(addr) {
   const key = import.meta.env.VITE_MORALIS_KEY;
-  const url = `https://deep-index.moralis.io/api/v2.2/erc20/${addr}?chain=cronos`;
-  const r = await fetch(url, {
-    headers: { 'X-API-Key': key },
-  });
-  if (!r.ok) return null;
-  const data = await r.json();
+  if (!key) return null;
+
+  // 1) Metadata (name/symbol/decimals)
+  const metaUrl = `https://deep-index.moralis.io/api/v2.2/erc20/metadata?chain=cronos&addresses[]=${addr}`;
+  const metaRes = await fetch(metaUrl, { headers: { "X-API-Key": key } });
+  if (!metaRes.ok) {
+    if (metaRes.status !== 404) console.warn("[Moralis] metadata failed", metaRes.status);
+  }
+  const meta = metaRes.ok ? await metaRes.json() : null;
+  const m = Array.isArray(meta) ? meta[0] : null;
+
+  // 2) Price (USD)
+  const priceUrl = `https://deep-index.moralis.io/api/v2.2/erc20/${addr}/price?chain=cronos`;
+  const priceRes = await fetch(priceUrl, { headers: { "X-API-Key": key } });
+  if (!priceRes.ok) {
+    if (priceRes.status !== 404) console.warn("[Moralis] price failed", priceRes.status);
+  }
+  const priceJson = priceRes.ok ? await priceRes.json() : null;
+
   return {
-    name: data.name,
-    symbol: data.symbol,
-    decimals: data.decimals,
-    holders: data.holder_count ?? null,
-    price: data.usd_price ?? null,
-    marketCap: data.usd_market_cap ?? null,
+    name: m?.name ?? null,
+    symbol: m?.symbol ?? null,
+    decimals: m?.decimals ?? 18,
+    holders: null,              // Moralis v2.2 doesn’t give holders here
+    price: priceJson?.usdPrice ?? null,
+    marketCap: priceJson?.marketCap ?? null, // may be null if Moralis can’t compute
   };
 }
 
@@ -489,22 +502,17 @@ useEffect(() => {
 useEffect(() => {
   (async () => {
     const data = await fetchMoralisTokenData(TOKEN_ADDRESS);
-    if (!data) {
-      if (import.meta.env.DEV) console.debug("[explorer] no match (404/unknown schema)");
-      return; // leave holders as "—"
-    }
-    // common shapes: { holders, name, symbol } or nested under data
-    const root = data.data || data;
-    if (root.holders != null) setHolders(Number(root.holders));
-    if (root.name || root.symbol) {
-      setTokenMeta((prev) => ({
-        ...prev,
-        name: prev.name || root.name || prev.name,
-        symbol: prev.symbol || root.symbol || prev.symbol,
-      }));
-    }
+    if (!data) return;
+    setTokenMeta(prev => ({
+      ...prev,
+      name: prev.name || data.name || prev.name,
+      symbol: prev.symbol || data.symbol || prev.symbol,
+      decimals: data.decimals ?? prev.decimals,
+    }));
+    // holders is not provided by Moralis v2.2 here → leave as is
   })();
 }, []);
+
 
   // --- Price poll + series (Dexscreener) ---
   useEffect(() => {
