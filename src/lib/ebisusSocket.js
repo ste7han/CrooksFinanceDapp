@@ -6,17 +6,16 @@ let socket;
 export function getEbisuSocket() {
   if (socket) return socket;
 
-  // through your Vite proxy (vite.config has /ebisus -> https://api.ebisusbay.com)
-  socket = io(window.location.origin, {
-    path: "/ebisus/socket.io",
-    transports: ["polling", "websocket"],
+  // connect directly to Ebisu's public Socket.IO endpoint
+  socket = io("https://api.ebisusbay.com", {
+    transports: ["websocket"],
     reconnection: true,
     reconnectionAttempts: 20,
     reconnectionDelay: 1500,
     timeout: 10000,
   });
 
-  // very loud debug so we SEE the lifecycle
+  // helpful debug output
   socket.on("connect", () => {
     console.debug("[ebisus] connected", socket.id,
       "transport:", socket.io.engine?.transport?.name);
