@@ -591,11 +591,16 @@ useEffect(() => {
   const socket = getEbisuSocket();
 
   const handleEvent = (type) => (data) => {
-    const nftAddr = (data?.nft?.nftAddress || data?.nftAddress || "").toLowerCase();
-    if (nftAddr === addr) {
-      addToFeed(setEbisuFeed, normalizeEbisuEvent(type, data));
-    }
-  };
+  const nftAddr = (data?.nft?.nftAddress || data?.nftAddress || "").toLowerCase();
+  console.debug("[ebisus] incoming event:", type, nftAddr, data);
+  console.debug("[ebisus] target addr:", addr);
+  if (nftAddr === addr) {
+    console.debug("[ebisus] MATCH — pushing to feed", type, data);
+    addToFeed(setEbisuFeed, normalizeEbisuEvent(type, data));
+  } else {
+    console.debug("[ebisus] ignored event for other addr:", nftAddr);
+  }
+};
 
   // Listen to all relevant events (case-insensitive)
   ["Listed", "listed", "Sold", "sold", "OfferMade", "offerMade", "CollectionOfferMade", "collectionOfferMade"]
