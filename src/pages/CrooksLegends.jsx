@@ -590,38 +590,37 @@ useEffect(() => {
   const addr = NFT_ADDRESS.toLowerCase();
   const socket = getEbisuSocket();
 
-  const handleEvent = (type) => (data) => {
-    // dump out all possible keys so we see what Ebisu actually sends
-    console.debug("[ebisus] raw event received:", type, data);
+  const handleEvent = (type) => (msg) => {
+  // Ebisu sends { event: {...} }, so unwrap if needed
+  const data = msg?.event ? msg.event : msg;
 
-    const possible = {
-      nftDotNftAddress: data?.nft?.nftAddress,
-      nftDotAddress: data?.nft?.address,
-      nftAddress: data?.nftAddress,
-      collectionAddress: data?.collectionAddress,
-      address: data?.address,
-    };
+  console.debug("[ebisus] raw event received:", type, data);
 
-    console.debug("[ebisus] address fields:", possible);
-
-    // pick the first that is a string
-    const rawAddr = Object.values(possible).find(
-      (v) => typeof v === "string" && v.trim().startsWith("0x")
-    );
-
-    const nftAddr = rawAddr ? rawAddr.trim().toLowerCase() : "";
-    console.debug("[ebisus] extracted nftAddr:", nftAddr || "<empty>");
-    console.debug("[ebisus] target addr:", addr);
-
-    if (nftAddr && (nftAddr === addr || nftAddr.endsWith(addr))) {
-      console.debug("[ebisus] ✅ MATCH — pushing to feed", type, data);
-      const normalized = normalizeEbisuEvent(type, data);
-      console.debug("[ebisus] normalized →", normalized);
-      addToFeed(setEbisuFeed, normalized);
-    } else {
-      console.debug("[ebisus] 🚫 ignored event for other addr:", nftAddr || "<empty>");
-    }
+  const possible = {
+    nftDotNftAddress: data?.nft?.nftAddress,
+    nftDotAddress: data?.nft?.address,
+    nftAddress: data?.nftAddress,
+    collectionAddress: data?.collectionAddress,
+    address: data?.address,
   };
+
+  console.debug("[ebisus] address fields:", possible);
+
+  const rawAddr = Object.values(possible).find(
+    (v) => typeof v === "string" && v.trim().startsWith("0x")
+  );
+  const nftAddr = rawAddr ? rawAddr.trim().toLowerCase() : "";
+  console.debug("[ebisus] extracted nftAddr:", nftAddr || "<empty>");
+  console.debug("[ebisus] target addr:", addr);
+
+  if (nftAddr && (nftAddr === addr || nftAddr.endsWith(addr))) {
+    console.debug("[ebisus] ✅ MATCH — pushing to feed", type, data);
+    const normalized = normalizeEbisuEvent(type, data);
+    addToFeed(setEbisuFeed, normalized);
+  } else {
+    console.debug("[ebisus] 🚫 ignored event for other addr:", nftAddr || "<empty>");
+  }
+};
 
   [
     "Listed",
