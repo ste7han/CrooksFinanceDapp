@@ -555,33 +555,26 @@ useEffect(() => {
   const addr = NFT_ADDRESS.toLowerCase();
   const socket = getEbisuSocket();
 
-  socket.on("Sold", (data) => {
-    const nftAddr = (data?.nft?.nftAddress || "").toLowerCase();
+  const handleEvent = (type) => (data) => {
+    const nftAddr = (data?.nft?.nftAddress || data?.nftAddress || "").toLowerCase();
     if (nftAddr === addr) {
-      addToFeed(setEbisuFeed, normalizeEbisuEvent("Sold", data));
+      addToFeed(setEbisuFeed, normalizeEbisuEvent(type, data));
     }
-  });
+  };
 
-  socket.on("Listed", (data) => {
-    const nftAddr = (data?.nft?.nftAddress || "").toLowerCase();
-    if (nftAddr === addr) {
-      addToFeed(setEbisuFeed, normalizeEbisuEvent("Listed", data));
-    }
-  });
+  // Listen to all relevant events (case-insensitive)
+  ["Listed", "listed", "Sold", "sold", "OfferMade", "offerMade", "CollectionOfferMade", "collectionOfferMade"]
+    .forEach(ev => socket.on(ev, handleEvent(ev)));
 
-  socket.on("connect", () => {
-    console.debug("[ebisus] connected to live feed");
-  });
-
-  socket.on("disconnect", () => {
-    console.debug("[ebisus] disconnected from live feed");
-  });
+  socket.on("connect", () => console.debug("[ebisus] connected to live feed"));
+  socket.on("disconnect", () => console.debug("[ebisus] disconnected from live feed"));
 
   return () => {
-    socket.off("Sold");
-    socket.off("Listed");
+    ["Listed", "listed", "Sold", "sold", "OfferMade", "offerMade", "CollectionOfferMade", "collectionOfferMade"]
+      .forEach(ev => socket.off(ev));
   };
 }, []);
+
 
   // Read-only RPC via env; valt terug op wallet provider
   const RPC = (() => {
