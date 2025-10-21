@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
 import { useWallet } from "../context/WalletContext";
+import { getEbisuSocket } from "@/lib/ebisusSocket";
 
 // Keep a small rolling feed
 const FEED_LIMIT = 12;
@@ -549,75 +550,38 @@ export default function CrooksRewardsDapp() {
 
 
 
-  // 🔁 LIVE MARKET FEED (SSE via local relay)
-  useEffect(() => {
-    const addr = NFT_ADDRESS.toLowerCase();
-    const FEED_BASE = import.meta.env.VITE_EBISUS_FEED_URL || "";
-    const es = FEED_BASE ? new EventSource(`${FEED_BASE}?addr=${addr}`) : null;
-    if (!es) return;
+// 🔁 LIVE MARKET FEED (Socket.IO direct from Ebisu)
+useEffect(() => {
+  const addr = NFT_ADDRESS.toLowerCase();
+  const socket = getEbisuSocket();
 
-    const normalize = (type, ev) => {
-      const nft = ev?.nft || ev;
-      const rawId = String(
-        ev?.nftId ??
-          ev?.tokenId ??
-          ev?.edition ??
-          nft?.nftId ??
-          nft?.tokenId ??
-          nft?.edition ??
-          ""
-      );
-      const addrRaw = nft?.nftAddress || ev?.nftAddress || "";
-      const ts = Number(
-        ev?.saleTime || ev?.listingTime || ev?.time || 0
-      );
-      const permalink =
-        nft?.market_uri ||
-        (addrRaw && rawId
-          ? `https://app.ebisusbay.com/collection/${addrRaw}/${rawId}`
-          : "");
-      const dedupeKey = String(
-        ev?.listingId ??
-          ev?.txHash ??
-          `${type}|${addrRaw.toLowerCase()}|${rawId}|${
-            ev?.priceWei ?? ev?.price ?? ""
-          }|${ts}`
-      );
-      return {
-        type,
-        listingId: ev?.listingId,
-        nftId: rawId,
-        nftAddress: addrRaw,
-        name: nft?.name || (rawId ? `#${rawId}` : ""),
-        image: nft?.image || nft?.original_image || PLACEHOLDER_SRC,
-        price:
-          ev?.price ??
-          (ev?.priceWei
-            ? Number(ethers.formatUnits(ev.priceWei, 18)).toFixed(2)
-            : undefined),
-        time: ts,
-        uri: permalink,
-        dedupeKey,
-      };
-    };
+  socket.on("Sold", (data) => {
+    const nftAddr = (data?.nft?.nftAddress || "").toLowerCase();
+    if (nftAddr === addr) {
+      addToFeed(setEbisuFeed, normalizeEbisuEvent("Sold", data));
+    }
+  });
 
-    const handle = (type) => (evt) => {
-      try {
-        const payload = JSON.parse(evt.data);
-        addToFeed(setEbisuFeed, normalize(type, payload));
-      } catch {}
-    };
+  socket.on("Listed", (data) => {
+    const nftAddr = (data?.nft?.nftAddress || "").toLowerCase();
+    if (nftAddr === addr) {
+      addToFeed(setEbisuFeed, normalizeEbisuEvent("Listed", data));
+    }
+  });
 
-    es.addEventListener("listed", handle("Listed"));
-    es.addEventListener("sold", handle("Sold"));
-    es.onerror = (e) => console.warn("[ebisus] sse error", e);
+  socket.on("connect", () => {
+    console.debug("[ebisus] connected to live feed");
+  });
 
-    return () => {
-      try {
-        es?.close();
-      } catch {}
-    };
-  }, []);
+  socket.on("disconnect", () => {
+    console.debug("[ebisus] disconnected from live feed");
+  });
+
+  return () => {
+    socket.off("Sold");
+    socket.off("Listed");
+  };
+}, []);
 
   // Read-only RPC via env; valt terug op wallet provider
   const RPC = (() => {
