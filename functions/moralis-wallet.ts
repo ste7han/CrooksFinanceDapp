@@ -47,6 +47,8 @@ export const onRequestPost: PagesFunction = async ({ request, env }) => {
     });
   }
 
+  console.log("ENV DEBUG", { hasKey: !!env.MORALIS_KEY, len: env.MORALIS_KEY?.length });
+
   const resp = await fetch(target.toString(), {
     headers: { "X-API-Key": apiKey },
   });
