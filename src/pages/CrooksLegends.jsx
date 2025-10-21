@@ -75,6 +75,12 @@ const BTN_GHOST = `${BTN_BASE} bg-white/8 hover:bg-white/14 border border-white/
 const H1 = "text-3xl md:text-4xl font-bold tracking-tight";
 const SUB = "text-sm md:text-base opacity-80";
 
+// Live SSE base (already used) and optional REST endpoint for recent sales
+const FEED_BASE = (import.meta.env.VITE_EBISUS_FEED_URL || "").trim();
+// Prefer an explicit recent endpoint; fall back to `${FEED_BASE}/recent`
+const RECENT_BASE = (import.meta.env.VITE_EBISUS_RECENT_URL || (FEED_BASE ? `${FEED_BASE.replace(/\/+$/,"")}/recent` : "")).trim();
+
+
 // quick number prettifier
 const fmt = (n, d = 2) => {
   const x = Number(n);
@@ -290,52 +296,71 @@ function loadCache(key, maxAgeMs = 60 * 60 * 1000) {
 
 
 async function discoverOwnedViaMoralis(owner, weights) {
-  // No public key needed anymore; we use our server proxy.
   if (!owner) return null;
 
+  // cache-key blijft gelijk; we willen alleen niet te vroeg stoppen met pagineren
   const cacheKey = moralisCacheKey(owner, weights?.root);
   const cached = loadCache(cacheKey);
   if (cached) {
-    const filtered = cached.filter((id) => !!weights?.tokens?.[String(id)]).sort((a, b) => a - b);
+    const filtered = cached
+      .filter((id) => !!weights?.tokens?.[String(id)])
+      .sort((a, b) => a - b);
     return { ids: filtered, images: {} };
   }
 
   let cursor = "";
   const ids = [];
   const images = {};
-  // Hard cap pages to protect CU (bump later if needed)
-  const MAX_PAGES = 5;
 
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const data = await moralisProxyPage(owner, { cursor, collection: NFT_ADDRESS });
+  // 🔁 blijf doorgaan totdat Moralis geen cursor meer teruggeeft
+  while (true) {
+    const data = await moralisProxyPage(owner, {
+      cursor: cursor || "",
+      collection: NFT_ADDRESS,
+      limit: 100,          // forceer 100 per pagina (sommige backends defaulten naar 50)
+    });
     if (!data || !Array.isArray(data.result) || data.result.length === 0) break;
 
     for (const r of data.result) {
-      const n = Number(r.token_id);
+      const n = Number(r.token_id ?? r.tokenId);
       if (!Number.isFinite(n)) continue;
 
-      // extract image once
-      let image = r.normalized_metadata?.image
-        || (Array.isArray(r.media) && r.media[0] && (r.media[0].gateway_media_url || r.media[0].original_media_url))
-        || (() => { try { const meta = r.metadata ? JSON.parse(r.metadata) : null; return meta?.image || meta?.image_url || meta?.animation_url || null; } catch { return null; } })();
+      // pak een bruikbare afbeelding als die aanwezig is
+      let image =
+        r.normalized_metadata?.image ||
+        (Array.isArray(r.media) && r.media[0] && (r.media[0].gateway_media_url || r.media[0].original_media_url)) ||
+        (() => {
+          try {
+            const meta = r.metadata ? JSON.parse(r.metadata) : null;
+            return meta?.image || meta?.image_url || meta?.animation_url || null;
+          } catch {
+            return null;
+          }
+        })();
 
       if (image) images[n] = resolveMediaUrl(image);
       ids.push(n);
     }
 
-    if (!data.cursor) break;
-    cursor = data.cursor;
+    // vervolg-paginatie
+    cursor = data.cursor || null;
+    if (!cursor) break;
+
+    // kleine pauze tegen throttling
+    await sleep(150);
   }
 
-  ids.sort((a, b) => a - b);
-  saveCache(cacheKey, ids);
+  // de-dupe + sort
+  const uniq = Array.from(new Set(ids)).sort((a, b) => a - b);
+  saveCache(cacheKey, uniq);
 
-  const filtered = ids.filter((id) => !!weights?.tokens?.[String(id)]);
-  const filteredImages = {};
+  const filtered = uniq.filter((id) => !!weights?.tokens?.[String(id)]);
+  const filteredImages = {}; // 👈 types weghalen
   for (const id of filtered) if (images[id]) filteredImages[id] = images[id];
 
   return { ids: filtered, images: filteredImages };
 }
+
 
 
 async function ownerOfSafe(c, id) {
@@ -423,17 +448,71 @@ async function hydrateImagesViaTokenURI(nftReadOnly, ids, setTokenImages) {
   }
 }
 
+// Normalize a single market event into our UI shape
+function normalizeEbisuEvent(type, ev) {
+  const nft = ev?.nft || ev || {};
+  const rawId = String(
+    ev?.nftId ?? ev?.tokenId ?? ev?.edition ?? nft?.nftId ?? nft?.tokenId ?? nft?.edition ?? ""
+  );
+  const addrRaw = nft?.nftAddress || ev?.nftAddress || "";
+  const ts = Number(ev?.saleTime ?? ev?.listingTime ?? ev?.time ?? 0);
+  const permalink =
+    nft?.market_uri ||
+    (addrRaw && rawId ? `https://app.ebisusbay.com/collection/${addrRaw}/${rawId}` : "");
+  const dedupeKey = String(
+    ev?.listingId ??
+    ev?.txHash ??
+    `evt|${(addrRaw||"").toLowerCase()}|${rawId}|${ev?.priceWei ?? ev?.price ?? ""}|${ts}`
+  );
+  return {
+    type,
+    listingId: ev?.listingId,
+    nftId: rawId,
+    nftAddress: addrRaw,
+    name: nft?.name || (rawId ? `#${rawId}` : ""),
+    image: nft?.image || nft?.original_image || PLACEHOLDER_SRC,
+    price: ev?.price ?? (ev?.priceWei ? Number(ethers.formatUnits(ev.priceWei, 18)).toFixed(2) : undefined),
+    time: ts,
+    uri: permalink,
+    dedupeKey,
+  };
+}
+
+
+// Push many events at once, keep newest first, unique by dedupeKey, and cap
+function pushManyToFeed(setter, items, limit = FEED_LIMIT) {
+  setter((prev) => {
+    const seen = new Set();
+    const merged = [...items, ...prev];            // new first
+    const unique = [];
+    for (const it of merged) {
+      if (!it) continue;
+      if (seen.has(it.dedupeKey)) continue;
+      seen.add(it.dedupeKey);
+      unique.push(it);
+      if (unique.length >= limit) break;
+    }
+    // sort desc by time if present
+    unique.sort((a, b) => (b.time || 0) - (a.time || 0));
+    return unique;
+  });
+}
+
+
 // Use our server endpoint instead of calling Moralis from the browser
 const MORALIS_PROXY = "/moralis-wallet";
 
 // Small wrapper with backoff + session cache to save CU
-async function moralisProxyPage(owner, { cursor = "", collection = null } = {}) {
+async function moralisProxyPage(
+  owner,
+  { cursor = "", collection = null, limit = 100 } = {}
+) {
   const u = new URL(MORALIS_PROXY, location.origin);
   u.searchParams.set("owner", owner);
   if (cursor) u.searchParams.set("cursor", cursor);
 
-  // sessionStorage cache (owner+cursor+collection)
-  const cacheKey = `mrl:${owner}:${collection || ""}:${cursor}`;
+  // sessionStorage cache (owner+cursor+collection+limit)
+  const cacheKey = `mrl:${owner}:${collection || ""}:${limit}:${cursor}`;
   const cached = sessionStorage.getItem(cacheKey);
   if (cached) {
     try { return JSON.parse(cached); } catch {}
@@ -442,13 +521,15 @@ async function moralisProxyPage(owner, { cursor = "", collection = null } = {}) 
   const resp = await fetch(u.toString(), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ token_addresses: collection || "" }),
+    body: JSON.stringify({
+      token_addresses: collection || "",
+      limit,             // ➜ mee naar de server-proxy
+    }),
   });
 
-  // gentle backoff if 429
   if (resp.status === 429) {
     await new Promise(r => setTimeout(r, 800));
-    return moralisProxyPage(owner, { cursor, collection });
+    return moralisProxyPage(owner, { cursor, collection, limit });
   }
   if (!resp.ok) return null;
 
@@ -458,12 +539,39 @@ async function moralisProxyPage(owner, { cursor = "", collection = null } = {}) 
 }
 
 
+
 export default function CrooksRewardsDapp() {
   const [ranksById, setRanksById] = useState({});
   const [rankMax, setRankMax] = useState("");
   const [sortBy, setSortBy] = useState("id");
   const [ebisuFeed, setEbisuFeed] = useState([]);
   const { provider, signer, address, networkOk } = useWallet();
+
+  // 🔂 Load the most recent 4 sales on first render
+useEffect(() => {
+  const addr = NFT_ADDRESS.toLowerCase();
+  if (!RECENT_BASE) return;
+
+  (async () => {
+    try {
+      const u = new URL(RECENT_BASE, location.origin);
+      u.searchParams.set("addr", addr);
+      u.searchParams.set("limit", "4");
+      const res = await fetch(u.toString(), { cache: "no-store" });
+      if (!res.ok) return;
+      const json = await res.json();
+
+      const normalized = (Array.isArray(json) ? json : [])
+        .map((ev) => normalizeEbisuEvent(ev?.type || "Sold", ev))
+        .filter(Boolean)
+        .sort((a, b) => (b.time || 0) - (a.time || 0));
+
+      pushManyToFeed(setEbisuFeed, normalized, FEED_LIMIT);
+    } catch (e) {
+      console.warn("[ebisus] recent fetch failed", e);
+    }
+  })();
+}, []);
 
   // 🔁 LIVE MARKET FEED (SSE via local relay)
   useEffect(() => {
