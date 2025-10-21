@@ -451,41 +451,68 @@ async function hydrateImagesViaTokenURI(nftReadOnly, ids, setTokenImages) {
 
 // Normalize a single market event into our UI shape
 function normalizeEbisuEvent(type, ev) {
-  const nft = ev?.nft || ev || {};
+  if (!ev) return null;
+
+  const nft = ev.nft || {};
   const rawId = String(
-    ev?.nftId ?? ev?.tokenId ?? ev?.edition ?? nft?.nftId ?? nft?.tokenId ?? nft?.edition ?? ""
+    ev.nftId ?? ev.tokenId ?? nft.nftId ?? nft.tokenId ?? nft.edition ?? ""
   );
-  const addrRaw = nft?.nftAddress || ev?.nftAddress || "";
+
+  const addrRaw = (
+    ev.nftAddress ??
+    nft.nftAddress ??
+    ev.collectionAddress ??
+    ""
+  ).toLowerCase();
+
+  // Use any timestamp we can find
   const ts = Number(
-    ev?.saleTime ??
-    ev?.listingTime ??
-    ev?.time ??
-    ev?.event?.blockTimestamp ??
-    ev?.event?.time ??
+    ev.saleTime ??
+    ev.listingTime ??
+    ev.time ??
+    ev.event?.blockTimestamp ??
+    ev.event?.time ??
     Date.now() / 1000
   );
 
+  // Build link
   const permalink =
-    nft?.market_uri ||
-    (addrRaw && rawId ? `https://app.ebisusbay.com/collection/${addrRaw}/${rawId}` : "");
+    nft.market_uri ||
+    nft.last_sale?.uri ||
+    nft.offer?.uri ||
+    `https://app.ebisusbay.com/collection/cronos/${addrRaw}/${rawId}`;
+
+  const image =
+    nft.image ||
+    nft.original_image ||
+    nft.image_url ||
+    nft.media?.[0]?.gateway_media_url ||
+    PLACEHOLDER_SRC;
+
+  const price = Number(
+    ev.price ?? (ev.priceWei ? ethers.formatUnits(ev.priceWei, 18) : 0)
+  ).toFixed(2);
+
   const dedupeKey = String(
-    ev?.listingId ??
-    ev?.txHash ??
-    `evt|${(addrRaw||"").toLowerCase()}|${rawId}|${ev?.priceWei ?? ev?.price ?? ""}|${ts}`
+    ev.listingId ??
+    ev.txHash ??
+    `evt|${addrRaw}|${rawId}|${ev.priceWei ?? ev.price ?? ""}|${ts}`
   );
+
   return {
     type,
-    listingId: ev?.listingId,
+    listingId: ev.listingId,
     nftId: rawId,
     nftAddress: addrRaw,
-    name: nft?.name || (rawId ? `#${rawId}` : ""),
-    image: nft?.image || nft?.original_image || PLACEHOLDER_SRC,
-    price: ev?.price ?? (ev?.priceWei ? Number(ethers.formatUnits(ev.priceWei, 18)).toFixed(2) : undefined),
+    name: nft.name || `#${rawId}`,
+    image,
+    price,
     time: ts,
     uri: permalink,
     dedupeKey,
   };
 }
+
 
 
 // Push many events at once, keep newest first, unique by dedupeKey, and cap
