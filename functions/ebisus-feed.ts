@@ -1,14 +1,9 @@
-export const onRequestGet: PagesFunction<{
-  VITE_EBISUS_API: string | undefined;
-}> = async (ctx) => {
-  const { env } = ctx;
+export const onRequestGet: PagesFunction = async (ctx) => {
   const url = new URL(ctx.request.url);
   const addr = (url.searchParams.get("addr") || "").toLowerCase();
   if (!addr) return new Response("addr required", { status: 400 });
 
-  const base = (env.VITE_EBISUS_API || "https://api.ebisusbay.com").replace(/\/+$/, "");
-  // ✅ Correct endpoint:
-  const salesEndpoint = `${base}/api/v2/events?event_type=sale&collection_address=${addr}&limit=8`;
+  const salesEndpoint = `https://api.ebisusbay.com/api/v1/events?event_type=sale&collection_address=${addr}&limit=8`;
 
   const stream = new ReadableStream({
     start(controller) {
@@ -53,7 +48,7 @@ export const onRequestGet: PagesFunction<{
           send("error", { msg: String(e) });
         }
 
-        setTimeout(poll, 15000); // repeat every 15s
+        setTimeout(poll, 15000); // every 15s
       }
 
       poll();
