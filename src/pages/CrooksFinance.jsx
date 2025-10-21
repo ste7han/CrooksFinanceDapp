@@ -420,11 +420,13 @@ async function computeStakedForWallets(wallets, provider) {
 export default function CrooksFinance() {
   const { provider } = useWallet();
 
-// read provider (prefer env RPC; fallback to public Cronos)
+// read provider (prefer env RPC; fallback to our CF function)
 const [readProvider, setReadProvider] = useState(() => {
-  const url = (import.meta.env.VITE_RPC_URL || "").trim() || "https://evm.cronos.org";
+  const url =
+    (import.meta.env.VITE_RPC_URL || `${window.location.origin}/rpc-cronos`).trim();
   return new ethers.JsonRpcProvider(url, { chainId: 25, name: "cronos" });
 });
+
 
 useEffect(() => {
   if (!readProvider && provider) setReadProvider(provider);
