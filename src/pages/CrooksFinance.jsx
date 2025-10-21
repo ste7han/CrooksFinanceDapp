@@ -23,7 +23,7 @@ const TRACKED_TOKENS = {
   CORGIAI: "0x6b431B8a964BFcf28191b07c91189fF4403957D0",
   PPFT:    "0x59BAfb7168972EcCA5e395F7dA88e71eCe47a260",
   VNO:     "0xdb7d0A1eC37dE1dE924F8e8adac6Ed338D4404E9",  
-  KACHING: "0x0x4ddA1Bb6E378dCEf97bfF1057b6452615E86373c",  
+  KACHING: "0x4ddA1Bb6E378dCEf97bfF1057b6452615E86373c",  
 };
 
 
@@ -420,12 +420,15 @@ async function computeStakedForWallets(wallets, provider) {
 export default function CrooksFinance() {
   const { provider } = useWallet();
 
-  // read provider (prefer /rpc proxy; fallback to wallet)
-  const [readProvider, setReadProvider] = useState(() => {
-    const url = `${window.location.origin}/rpc`;
-    try { new URL(url); return new ethers.JsonRpcProvider(url); } catch { return null; }
-  });
-  useEffect(() => { if (!readProvider && provider) setReadProvider(provider); }, [provider, readProvider]);
+// read provider (prefer env RPC; fallback to public Cronos)
+const [readProvider, setReadProvider] = useState(() => {
+  const url = (import.meta.env.VITE_RPC_URL || "").trim() || "https://evm.cronos.org";
+  return new ethers.JsonRpcProvider(url, { chainId: 25, name: "cronos" });
+});
+
+useEffect(() => {
+  if (!readProvider && provider) setReadProvider(provider);
+}, [provider, readProvider]);
 
   // ----- ERC20 base info -----
   const [tokenMeta, setTokenMeta] = useState({ name: "", symbol: "", decimals: 18, totalSupply: 0 });
@@ -709,7 +712,7 @@ useEffect(() => {
           <div className={`${GLASS} ${SOFT_SHADOW} p-4`}>
             <div className="text-xs opacity-70">Holders</div>
             <div className="mt-1 text-2xl font-bold">{holders ?? "—"}</div>
-            <div className="mt-1 text-[11px] opacity-60">Cronos Explorer</div>
+            <div className="mt-1 text-[11px] opacity-60">Moralis</div>
           </div>
           <div className={`${GLASS} ${SOFT_SHADOW} p-4`}>
             <div className="text-xs opacity-70">Liquidity (USD)</div>
