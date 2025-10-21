@@ -321,12 +321,18 @@ async function fetchMoralisErc20sForWallet(walletAddress) {
 
 /* ============ STAKING ADAPTER EXECUTION ============ */
 
-// Minimal ABIs to cover common patterns:
+// ABIs (add the no-pid userInfo variant)
 const ABI_BALANCEOF = [
   "function balanceOf(address) view returns (uint256)",
 ];
-const ABI_USERINFO = [
+// classic MasterChef
+const ABI_USERINFO_CLASSIC = [
   "function userInfo(uint256,address) view returns (uint256 amount, uint256 rewardDebt)"
+];
+// single-pool style (no pid)
+const ABI_USERINFO_NOPID = [
+  "function userInfo(address) view returns (uint256 amount, uint256 rewardDebt)",
+  "function userInfo(address) view returns (uint256)", // sometimes just amount
 ];
 const ABI_LOCKED = [
   "function locked(address) view returns (uint256 amount, uint256 end)",
@@ -340,32 +346,89 @@ const ABI_4626 = [
   "function previewRedeem(uint256 shares) view returns (uint256)",
 ];
 
+async function tryUserInfoClassic(contract, poolId, wallet) {
+  try {
+    const ui = await contract.userInfo(poolId, wallet);
+    const amount = Array.isArray(ui) ? (ui[0] ?? ui.amount ?? ui) : (ui?.amount ?? ui);
+    if (amount != null) return amount;
+  } catch {}
+  return null;
+}
+
+async function tryUserInfoNoPid(contract, wallet) {
+  try {
+    const ui = await contract.userInfo(wallet);
+    const amount = Array.isArray(ui) ? (ui[0] ?? ui.amount ?? ui) : (ui?.amount ?? ui);
+    if (amount != null) return amount;
+  } catch {}
+  return null;
+}
+
 async function readStakedAmount(adapter, wallet, provider) {
+  // Merge ABIs so any function that exists can be called
   const contract = new ethers.Contract(
     adapter.contract,
-    [...ABI_BALANCEOF, ...ABI_USERINFO, ...ABI_LOCKED, ...ABI_4626],
+    [
+      ...ABI_BALANCEOF,
+      ...ABI_USERINFO_CLASSIC,
+      ...ABI_USERINFO_NOPID,
+      ...ABI_LOCKED,
+      ...ABI_4626,
+    ],
     provider
   );
+
   try {
     if (adapter.type === "balanceOf") {
       const v = await contract.balanceOf(wallet);
       return Number(ethers.formatUnits(v, adapter.asset.decimals));
     }
+
     if (adapter.type === "chef") {
-      const { poolId = 0 } = adapter;
-      const ui = await contract.userInfo(poolId, wallet);
-      const amount = Array.isArray(ui) ? ui[0] : ui?.amount; // tuple or struct
-      return Number(ethers.formatUnits(amount || 0, adapter.asset.decimals));
+      const dec = adapter.asset.decimals;
+
+      // 1) try explicit pid (if provided)
+      let amountBn = null;
+      const hasPoolId = Number.isFinite(adapter.poolId);
+      if (hasPoolId) {
+        amountBn = await tryUserInfoClassic(contract, adapter.poolId, wallet);
+      }
+
+      // 2) if explicit pid missing/wrong → try no-pid userInfo(address)
+      if (amountBn == null) {
+        amountBn = await tryUserInfoNoPid(contract, wallet);
+      }
+
+      // 3) if still null → autoscan a few poolIds (0..9)
+      if (amountBn == null) {
+        for (let pid = 0; pid < 10; pid++) {
+          const v = await tryUserInfoClassic(contract, pid, wallet);
+          if (v && v !== 0n) {
+            amountBn = (amountBn ?? 0n) + BigInt(v);
+          }
+        }
+      }
+
+      // 4) last fallback → some “chefs” track staked shares via balanceOf
+      if (amountBn == null || amountBn === 0n) {
+        try {
+          const bal = await contract.balanceOf(wallet);
+          if (bal && bal !== 0n) amountBn = bal;
+        } catch {}
+      }
+
+      const amount = Number(ethers.formatUnits(amountBn ?? 0n, dec));
+      return amount;
     }
+
     if (adapter.type === "locked") {
-      // try locked(address) variations
+      // unchanged...
       let res;
       try { res = await contract.locked(wallet); } catch {}
       if (res != null) {
-        const amount = Array.isArray(res) ? res[0] : res; // (amount,end) or amount
+        const amount = Array.isArray(res) ? res[0] : res;
         return Number(ethers.formatUnits(amount || 0, adapter.asset.decimals));
       }
-      // try lockedBalances(address)
       try {
         const lb = await contract.lockedBalances(wallet);
         const total = Array.isArray(lb) ? lb[0] : lb?.total;
@@ -373,8 +436,9 @@ async function readStakedAmount(adapter, wallet, provider) {
       } catch {}
       return 0;
     }
+
     if (adapter.type === "vault4626") {
-      // shares -> underlying using convertToAssets/previewRedeem
+      // unchanged...
       const shares = await contract.balanceOf(wallet);
       if (!shares) return 0;
       let assets = null;
@@ -382,9 +446,10 @@ async function readStakedAmount(adapter, wallet, provider) {
       if (assets == null) {
         try { assets = await contract.previewRedeem(shares); } catch {}
       }
-      const v = assets ?? shares; // fallback: if neither fn exists, treat shares as assets
+      const v = assets ?? shares;
       return Number(ethers.formatUnits(v, adapter.asset.decimals));
     }
+
     return 0;
   } catch {
     return 0;
