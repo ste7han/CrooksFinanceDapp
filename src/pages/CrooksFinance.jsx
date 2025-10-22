@@ -5,6 +5,8 @@ import { useWallet } from "../context/WalletContext";
 
 /* =================== CONFIG =================== */
 
+console.debug("ENV check MOON =", import.meta.env.VITE_STAKE_MOON);
+
 // Your token (temporary)
 const TOKEN_ADDRESS = "0xe07375D293D7b8d3758B74FD6a71800A946B3b07";
 
