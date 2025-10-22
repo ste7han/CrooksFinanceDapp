@@ -509,10 +509,19 @@ function normalizeEbisuEvent(type, ev) {
     ""
   ).toLowerCase();
 
-  const isCro = !currencyAddr || currencyAddr === CRO_ZERO;
-  const isMoon = currencyAddr === MOON_ADDR;
+let isCro = !currencyAddr || currencyAddr === CRO_ZERO;
+let isMoon = currencyAddr === MOON_ADDR;
 
-  const currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
+// 🩵 fallback: detecteer MOON als prijs extreem hoog of in bekend MOON-range
+const numericPrice = Number(ev.price ?? 0);
+if (!isMoon && numericPrice > 5000) {
+  // MOON sales zijn vaak 5k–20k
+  isMoon = true;
+  isCro = false;
+}
+
+const currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
+
 
   const dedupeKey = String(
     ev.listingId ??
