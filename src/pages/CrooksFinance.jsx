@@ -70,9 +70,8 @@ const STAKING_ADAPTERS = [
 // MOON — single-pool MasterChef-style (no pid): userInfo(address)
 ...(STAKE.MOON ? [{
   label: "MOON Staking",
-  type: "chef",                 // 👈 important change
-  contract: STAKE.MOON,         // 0x08A58e…f2F1b from your env
-  // no poolId on purpose → code will call userInfo(address)
+  type: "auto", // <- probe multiple common getters
+  contract: STAKE.MOON,
   asset: { symbol: "MOON", address: TRACKED_TOKENS.MOON, decimals: 18 },
 }] : []),
 
@@ -344,6 +343,16 @@ const ABI_USERINFO_NOPID = [
   "function userInfo(address) view returns (uint256 amount, uint256 rewardDebt)",
   "function userInfo(address) view returns (uint256)", // sometimes just amount
 ];
+// common single-stake getters seen in simple staking contracts
+const ABI_COMMON_STAKE_GETTERS = [
+  "function staked(address) view returns (uint256)",
+  "function stakeOf(address) view returns (uint256)",
+  "function stakes(address) view returns (uint256)",
+  "function stakingBalance(address) view returns (uint256)",
+  "function deposits(address) view returns (uint256)",
+  "function getStake(address) view returns (uint256)",
+  "function balance(address) view returns (uint256)",
+];
 const ABI_LOCKED = [
   "function locked(address) view returns (uint256 amount, uint256 end)",
   "function locked(address) view returns (uint256)", // some lockers just return amount
@@ -384,42 +393,102 @@ async function readStakedAmount(adapter, wallet, provider) {
       ...ABI_USERINFO_NOPID,
       ...ABI_LOCKED,
       ...ABI_4626,
+      ...ABI_COMMON_STAKE_GETTERS,
     ],
     provider
   );
 
   try {
-    if (adapter.type === "balanceOf") {
-      const v = await contract.balanceOf(wallet);
-      return Number(ethers.formatUnits(v, adapter.asset.decimals));
+        // Auto probe for simple staking contracts (like MOON)
+    if (adapter.type === "auto") {
+      const dec = adapter.asset.decimals;
+
+      // 1) userInfo(address)
+      try {
+        const ui = await contract.userInfo(wallet);
+        const amountBn = Array.isArray(ui) ? (ui[0] ?? ui.amount ?? ui) : (ui?.amount ?? ui);
+        if (amountBn != null) {
+          return Number(ethers.formatUnits(amountBn, dec));
+        }
+      } catch {}
+
+      // 2) common getter names
+      const tryNames = [
+        "staked",
+        "stakeOf",
+        "stakes",
+        "stakingBalance",
+        "deposits",
+        "getStake",
+        "balance",
+        "balanceOf",
+      ];
+      for (const name of tryNames) {
+        if (!contract[name]) continue;
+        try {
+          const v = await contract[name](wallet);
+          if (v != null) {
+            return Number(ethers.formatUnits(v, dec));
+          }
+        } catch {}
+      }
+
+      // 3) MasterChef-style fallback (pid 0–4)
+      for (let pid = 0; pid < 5; pid++) {
+        try {
+          const ui = await contract.userInfo(pid, wallet);
+          const amountBn = Array.isArray(ui) ? (ui[0] ?? ui.amount ?? ui) : (ui?.amount ?? ui);
+          if (amountBn && amountBn !== 0n) {
+            return Number(ethers.formatUnits(amountBn, dec));
+          }
+        } catch {}
+      }
+
+      return 0;
     }
 
+        // --- simple staking pools that just track balanceOf(address) ---
+    if (adapter.type === "balanceOf") {
+      const v = await contract.balanceOf(wallet);
+      return Number(ethers.formatUnits(v || 0n, adapter.asset.decimals));
+    }
+
+    // --- MasterChef-style staking (with pid OR single-pool fallbacks) ---
     if (adapter.type === "chef") {
       const dec = adapter.asset.decimals;
 
-      // 1) try explicit pid (if provided)
+      // 1) explicit pid if provided
       let amountBn = null;
       const hasPoolId = Number.isFinite(adapter.poolId);
       if (hasPoolId) {
-        amountBn = await tryUserInfoClassic(contract, adapter.poolId, wallet);
+        try {
+          const ui = await contract.userInfo(adapter.poolId, wallet);
+          amountBn = Array.isArray(ui) ? (ui[0] ?? ui.amount ?? ui) : (ui?.amount ?? ui);
+        } catch {}
       }
 
-      // 2) if explicit pid missing/wrong → try no-pid userInfo(address)
+      // 2) single-pool userInfo(address) (no pid)
       if (amountBn == null) {
-        amountBn = await tryUserInfoNoPid(contract, wallet);
+        try {
+          const ui = await contract.userInfo(wallet);
+          amountBn = Array.isArray(ui) ? (ui[0] ?? ui.amount ?? ui) : (ui?.amount ?? ui);
+        } catch {}
       }
 
-      // 3) if still null → autoscan a few poolIds (0..9)
+      // 3) small autoscan pid 0..9
       if (amountBn == null) {
+        let acc = 0n;
         for (let pid = 0; pid < 10; pid++) {
-          const v = await tryUserInfoClassic(contract, pid, wallet);
-          if (v && v !== 0n) {
-            amountBn = (amountBn ?? 0n) + BigInt(v);
-          }
+          try {
+            const ui = await contract.userInfo(pid, wallet);
+            const v = Array.isArray(ui) ? (ui[0] ?? ui.amount ?? ui) : (ui?.amount ?? ui);
+            if (v && v !== 0n) acc += BigInt(v);
+          } catch {}
         }
+        amountBn = acc;
       }
 
-      // 4) last fallback → some “chefs” track staked shares via balanceOf
+      // 4) last fallback: some chefs keep shares in balanceOf
       if (amountBn == null || amountBn === 0n) {
         try {
           const bal = await contract.balanceOf(wallet);
@@ -427,9 +496,10 @@ async function readStakedAmount(adapter, wallet, provider) {
         } catch {}
       }
 
-      const amount = Number(ethers.formatUnits(amountBn ?? 0n, dec));
-      return amount;
+      return Number(ethers.formatUnits(amountBn ?? 0n, dec));
     }
+
+
 
     if (adapter.type === "locked") {
       // unchanged...
