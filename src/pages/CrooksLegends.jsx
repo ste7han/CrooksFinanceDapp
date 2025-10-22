@@ -664,29 +664,47 @@ useEffect(() => {
   socket.on("connect", () => console.debug("[ebisus] connected to live feed"));
   socket.on("disconnect", () => console.debug("[ebisus] disconnected from live feed"));
 
-    // 🪄 Fallback: fetch the last 4 recent sales if feed is empty
+    // 🪄 Fallback: fetch the last 4 recent unique sales if feed is empty
   if (!ebisuFeed.length && RECENT_BASE) {
     (async () => {
       try {
         console.debug("[ebisus] fetching recent sales from:", RECENT_BASE);
         const res = await fetch(RECENT_BASE, { cache: "no-store" });
-        if (res.ok) {
-          const json = await res.json();
-          const normalized = (Array.isArray(json) ? json : [])
-            .map((ev) => normalizeEbisuEvent(ev.type || "Sold", ev))
-            .filter(Boolean)
-            .slice(0, 4);
-          if (normalized.length) {
-            setEbisuFeed(normalized);
-            localStorage.setItem("ebisuFeed", JSON.stringify(normalized));
-            console.debug(`[ebisus] prefilled ${normalized.length} from /recent`);
-          }
+        if (!res.ok) return;
+
+        const json = await res.json();
+        const arr = Array.isArray(json) ? json : [];
+        const normalized = arr
+          .map((ev) => normalizeEbisuEvent(ev.type || "Sold", ev))
+          .filter(Boolean);
+
+        // 🧹 remove duplicates by unique listingId or dedupeKey
+        const seen = new Set();
+        const unique = [];
+        for (const n of normalized) {
+          const key = n.dedupeKey || n.listingId;
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          unique.push(n);
+        }
+
+        // sort newest first by time
+        unique.sort((a, b) => (b.time || 0) - (a.time || 0));
+
+        const limited = unique.slice(0, 4);
+        if (limited.length) {
+          setEbisuFeed(limited);
+          localStorage.setItem("ebisuFeed", JSON.stringify(limited));
+          console.debug(`[ebisus] prefilled ${limited.length} unique sales from /recent`);
+        } else {
+          console.debug("[ebisus] /recent returned no usable sales");
         }
       } catch (err) {
         console.warn("[ebisus] could not fetch recent feed:", err);
       }
     })();
   }
+
 
 
   return () => {
