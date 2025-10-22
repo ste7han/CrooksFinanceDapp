@@ -747,123 +747,85 @@ useEffect(() => {
   socket.on("connect", () => console.debug("[ebisus] connected to live feed"));
   socket.on("disconnect", () => console.debug("[ebisus] disconnected from live feed"));
 
-  // 🪄 Prefill from /recent or fallback API (unique, currency-aware)
+ // 🪄 Prefill from /recent or fallback API (unique, currency-aware)
 if (RECENT_BASE) {
   (async () => {
-    const CRO_ZERO = "0x0000000000000000000000000000000000000000";
-    const MOON_ADDR = "0x46E2B5423F6ff46A8A35861EC9DAfF26af77AB9A".toLowerCase();
-
     try {
       let list = [];
 
-      // 1️⃣ Try /recent (Cloudflare / Socket bridge)
+      // 1️⃣ First try Cloudflare /recent bridge (if your Ebisu socket exposes it)
       try {
         const res = await fetch(RECENT_BASE, { cache: "no-store" });
         if (res.ok) {
-          list = await res.json();
-          if (!Array.isArray(list)) list = [];
+          const data = await res.json();
+          if (Array.isArray(data)) list = data;
         }
       } catch {
-        console.warn("[ebisus] /recent failed");
+        console.warn("[ebisus] /recent fetch failed, continuing...");
       }
 
-      // 2️⃣ If still empty, fallback to Moralis NFT API (last 10 sales)
-if (!list.length) {
-  try {
-    const MORALIS_BACKUP = "/api/recent-sales";
-    const res = await fetch(MORALIS_BACKUP);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data?.result)) {
-        list = data.result.map((ev) => ({
-          type: "Sold",
-          price: ev.price
-            ? ethers.formatUnits(ev.price, 18)
-            : ev.value
-            ? ethers.formatUnits(ev.value, 18)
-            : ev.amount
-            ? ethers.formatUnits(ev.amount, 18)
-            : "0",
-          nftId: ev.token_id,
-          nftAddress: ev.token_address,
-          saleTime: Math.floor(new Date(ev.block_timestamp).getTime() / 1000),
-          listingId: ev.transaction_hash,
-          currency: "CRO",
-          nft: {
-            image: PLACEHOLDER_SRC,
-            name: `#${ev.token_id}`,
-          },
-        }));
-        console.debug(`[ebisus] fallback (Moralis transfers) fetched ${list.length} transfers`);
+      // 2️⃣ If still empty, fallback to your Moralis proxy (transfers)
+      if (!list.length) {
+        try {
+          const res = await fetch("/api/recent-sales");
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data?.result)) {
+              list = data.result.map((ev) => ({
+                type: "Sold",
+                price: "0.0", // transfers have no price
+                nftId: ev.token_id,
+                nftAddress: ev.token_address,
+                saleTime: Math.floor(
+                  new Date(ev.block_timestamp).getTime() / 1000
+                ),
+                listingId: ev.transaction_hash,
+                currency: "CRO",
+                nft: { image: PLACEHOLDER_SRC, name: `#${ev.token_id}` },
+              }));
+            }
+          }
+        } catch (e) {
+          console.warn("[ebisus] Moralis fallback failed:", e);
+        }
       }
-    }
-  } catch (e) {
-    console.warn("[ebisus] Moralis fallback failed:", e);
-  }
-}
 
-      if (!list.length) return;
-
-      // 3️⃣ Normalize, dedupe, sort
+      // 3️⃣ Normalize all entries so they render correctly
       const normalized = list
-        .map((ev) => {
-          const n = normalizeEbisuEvent(ev.type || "Sold", ev);
-          if (!n) return null;
-          const curAddr = (ev.currency || "").toLowerCase();
-          const isCro = !curAddr || curAddr === CRO_ZERO;
-          const isMoon = curAddr === MOON_ADDR;
-          n.currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
-          return n;
-        })
+        .map((ev) => normalizeEbisuEvent(ev.type || "Sold", ev))
         .filter(Boolean);
 
-      const seen = new Set();
-      const unique = [];
-      for (const n of normalized) {
-        const key =
-          n.listingId ||
-          n.dedupeKey ||
-          n.txHash ||
-          `${n.type}:${n.nftId}:${n.price}:${n.time}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        unique.push(n);
+      if (!normalized.length) {
+        console.debug("[ebisus] no recent fallback items, waiting for live socket…");
+        return;
       }
-      unique.sort((a, b) => (b.time || 0) - (a.time || 0));
 
-      const limited = unique.slice(0, 4);
-
-      if (limited.length) {
-        setEbisuFeed((prev) => {
-          const merged = [...limited, ...prev];
-          const mSeen = new Set();
-          const mUniq = [];
-          for (const it of merged) {
-            const key =
-              it.listingId ||
-              it.dedupeKey ||
-              it.txHash ||
-              `${it.type}:${it.nftId}:${it.price}:${it.time}`;
-            if (mSeen.has(key)) continue;
-            mSeen.add(key);
-            mUniq.push(it);
-            if (mUniq.length >= FEED_LIMIT) break;
-          }
-          mUniq.sort((a, b) => (b.time || 0) - (a.time || 0));
-          try {
-            localStorage.setItem(
-              "ebisusFeed",
-              JSON.stringify(mUniq.slice(0, 4))
-            );
-          } catch {}
-          return mUniq;
-        });
-      }
+      console.debug(`[ebisus] prefilled ${normalized.length} fallback items`);
+      setEbisuFeed((prev) => {
+        const merged = [...normalized, ...prev];
+        const seen = new Set();
+        const uniq = [];
+        for (const it of merged) {
+          const key =
+            it.listingId ||
+            it.dedupeKey ||
+            it.txHash ||
+            `${it.type}:${it.nftId}:${it.price}:${it.time}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          uniq.push(it);
+          if (uniq.length >= FEED_LIMIT) break;
+        }
+        uniq.sort((a, b) => (b.time || 0) - (a.time || 0));
+        localStorage.setItem("ebisuFeed", JSON.stringify(uniq.slice(0, 4)));
+        return uniq;
+      });
     } catch (err) {
-      console.warn("[ebisus] could not prefill feed:", err);
+      console.warn("[ebisus] prefill feed error:", err);
     }
   })();
 }
+
 
   return () => {
     [
@@ -878,9 +840,6 @@ if (!list.length) {
     ].forEach((ev) => socket.off(ev));
   };
 }, []);
-
-
-
 
 
 
