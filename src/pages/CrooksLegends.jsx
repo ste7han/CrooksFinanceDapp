@@ -449,7 +449,6 @@ async function hydrateImagesViaTokenURI(nftReadOnly, ids, setTokenImages) {
   }
 }
 
-// Normalize a single market event into our UI shape
 function normalizeEbisuEvent(type, ev) {
   if (!ev) return null;
 
@@ -491,22 +490,28 @@ function normalizeEbisuEvent(type, ev) {
     ev.price ?? (ev.priceWei ? ethers.formatUnits(ev.priceWei, 18) : 0)
   ).toFixed(2);
 
-  // 💰 Currency detection (handles multiple structures)
+  // 💰 Currency detection (extended)
   const CRO_ZERO = "0x0000000000000000000000000000000000000000";
   const MOON_ADDR = "0x46E2B5423F6ff46A8A35861EC9DAfF26af77AB9A".toLowerCase();
 
+  // Search through multiple possible currency fields
   const currencyAddr = (
     ev.currency ||
+    ev.currencyAddress ||
+    ev.currency_address ||
     nft.currency ||
+    nft.market?.currency ||
     ev.paymentToken ||
     ev.payment_token ||
     ev.payment_token_address ||
     ev.event?.currency ||
+    ev.event?.currencyAddress ||
     ""
   ).toLowerCase();
 
   const isCro = !currencyAddr || currencyAddr === CRO_ZERO;
   const isMoon = currencyAddr === MOON_ADDR;
+
   const currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
 
   const dedupeKey = String(
@@ -526,7 +531,7 @@ function normalizeEbisuEvent(type, ev) {
     time: ts,
     uri: permalink,
     dedupeKey,
-    currency, // ✅ attach currency directly here
+    currency,
   };
 }
 
