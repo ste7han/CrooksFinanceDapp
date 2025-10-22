@@ -2,6 +2,7 @@ export async function onRequestGet(context) {
   try {
     const nftAddress = "0x44102b7ab3e2b8edf77d188cd2b173ecbda60967";
     const moralisKey = context.env.MORALIS_KEY;
+
     if (!moralisKey) {
       return new Response(
         JSON.stringify({ error: "Missing MORALIS_KEY in environment" }),
@@ -12,8 +13,8 @@ export async function onRequestGet(context) {
     const urlObj = new URL(context.request.url);
     const limit = Number(urlObj.searchParams.get("limit")) || 10;
 
-    // ✅ use /trades instead of /trade
-    const url = `https://deep-index.moralis.io/api/v2/nft/${nftAddress}/trades?chain=cronos&limit=${limit}`;
+    // ✅ FIXED: use /trades and correct chain id (0x19 for Cronos Mainnet)
+    const url = `https://deep-index.moralis.io/api/v2/nft/${nftAddress}/trades?chain=0x19&limit=${limit}`;
 
     const res = await fetch(url, {
       headers: { "X-API-Key": moralisKey },
