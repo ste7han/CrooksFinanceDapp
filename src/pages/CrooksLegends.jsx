@@ -747,68 +747,114 @@ useEffect(() => {
   socket.on("connect", () => console.debug("[ebisus] connected to live feed"));
   socket.on("disconnect", () => console.debug("[ebisus] disconnected from live feed"));
 
-  // 🪄 Prefill from /recent if we still have nothing (unique, currency-aware)
-  if (RECENT_BASE) {
-    (async () => {
+  // 🪄 Prefill from /recent or fallback API (unique, currency-aware)
+if (RECENT_BASE) {
+  (async () => {
+    const CRO_ZERO = "0x0000000000000000000000000000000000000000";
+    const MOON_ADDR = "0x46E2B5423F6ff46A8A35861EC9DAfF26af77AB9A".toLowerCase();
+
+    try {
+      let list = [];
+
+      // 1️⃣ Try /recent (Cloudflare / Socket bridge)
       try {
         const res = await fetch(RECENT_BASE, { cache: "no-store" });
-        if (!res.ok) return;
-        let json;
-        try {
-          json = await res.json();
-        } catch {
-          console.warn("[ebisus] /recent returned non-JSON response");
-          return;
+        if (res.ok) {
+          list = await res.json();
+          if (!Array.isArray(list)) list = [];
         }
-        const list = Array.isArray(json) ? json : [];
-
-        const normalized = list
-          .map((ev) => {
-            const n = normalizeEbisuEvent(ev.type || "Sold", ev);
-            if (!n) return null;
-            const curAddr = (ev.currency || "").toLowerCase();
-            const isCro = !curAddr || curAddr === CRO_ZERO;
-            const isMoon = curAddr === MOON_ADDR;
-            n.currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
-            return n;
-          })
-          .filter(Boolean);
-
-        // de-dup + newest first
-        const seen = new Set();
-        const unique = [];
-        for (const n of normalized) {
-          const key = n.listingId || n.dedupeKey || n.txHash || `${n.type}:${n.nftId}:${n.price}:${n.time}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          unique.push(n);
-        }
-        unique.sort((a, b) => (b.time || 0) - (a.time || 0));
-
-        const limited = unique.slice(0, 4);
-        if (limited.length) {
-          // put into state and cache (but keep socket events able to add on top)
-          setEbisuFeed((prev) => {
-            const merged = [...limited, ...prev];
-            const mSeen = new Set();
-            const mUniq = [];
-            for (const it of merged) {
-              const key = it.listingId || it.dedupeKey || it.txHash || `${it.type}:${it.nftId}:${it.price}:${it.time}`;
-              if (mSeen.has(key)) continue;
-              mSeen.add(key);
-              mUniq.push(it);
-              if (mUniq.length >= FEED_LIMIT) break;
-            }
-            mUniq.sort((a, b) => (b.time || 0) - (a.time || 0));
-            try { localStorage.setItem("ebisusFeed", JSON.stringify(mUniq.slice(0, 4))); } catch {}
-            return mUniq;
-          });
-        }
-      } catch (err) {
-        console.warn("[ebisus] could not fetch recent feed:", err);
+      } catch {
+        console.warn("[ebisus] /recent failed");
       }
-    })();
-  }
+
+      // 2️⃣ If still empty, fallback to EbisuBay public API
+      if (!list.length) {
+        try {
+          const backup = "https://api.ebisusbay.com/api/v2/collection/cronos/crooks-legends/events?type=sold&limit=10";
+          const res = await fetch(backup, { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data?.data)) {
+              list = data.data.map((ev) => ({
+                type: "Sold",
+                price: ev.price,
+                nftId: ev.nftId || ev.tokenId || ev.id,
+                nftAddress: ev.collectionAddress,
+                saleTime: ev.blockTimestamp || ev.time,
+                listingId: ev.listingId,
+                currency: ev.currency || ev.currencyAddress,
+                nft: { image: ev.image, name: ev.name },
+              }));
+              console.debug(`[ebisus] fallback fetched ${list.length} sales`);
+            }
+          }
+        } catch (e) {
+          console.warn("[ebisus] backup fetch failed:", e);
+        }
+      }
+
+      if (!list.length) return;
+
+      // 3️⃣ Normalize, dedupe, sort
+      const normalized = list
+        .map((ev) => {
+          const n = normalizeEbisuEvent(ev.type || "Sold", ev);
+          if (!n) return null;
+          const curAddr = (ev.currency || "").toLowerCase();
+          const isCro = !curAddr || curAddr === CRO_ZERO;
+          const isMoon = curAddr === MOON_ADDR;
+          n.currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
+          return n;
+        })
+        .filter(Boolean);
+
+      const seen = new Set();
+      const unique = [];
+      for (const n of normalized) {
+        const key =
+          n.listingId ||
+          n.dedupeKey ||
+          n.txHash ||
+          `${n.type}:${n.nftId}:${n.price}:${n.time}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(n);
+      }
+      unique.sort((a, b) => (b.time || 0) - (a.time || 0));
+
+      const limited = unique.slice(0, 4);
+
+      if (limited.length) {
+        setEbisuFeed((prev) => {
+          const merged = [...limited, ...prev];
+          const mSeen = new Set();
+          const mUniq = [];
+          for (const it of merged) {
+            const key =
+              it.listingId ||
+              it.dedupeKey ||
+              it.txHash ||
+              `${it.type}:${it.nftId}:${it.price}:${it.time}`;
+            if (mSeen.has(key)) continue;
+            mSeen.add(key);
+            mUniq.push(it);
+            if (mUniq.length >= FEED_LIMIT) break;
+          }
+          mUniq.sort((a, b) => (b.time || 0) - (a.time || 0));
+          try {
+            localStorage.setItem(
+              "ebisusFeed",
+              JSON.stringify(mUniq.slice(0, 4))
+            );
+          } catch {}
+          return mUniq;
+        });
+      }
+    } catch (err) {
+      console.warn("[ebisus] could not prefill feed:", err);
+    }
+  })();
+}
 
   return () => {
     [
