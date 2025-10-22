@@ -767,31 +767,38 @@ if (RECENT_BASE) {
         console.warn("[ebisus] /recent failed");
       }
 
-      // 2️⃣ If still empty, fallback to EbisuBay public API
-      if (!list.length) {
-        try {
-          const backup = "https://api.ebisusbay.com/api/v2/collections/cronos/crooks-legends/events?type=sold&limit=10";
-          const res = await fetch(backup, { cache: "no-store" });
-          if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data?.data)) {
-              list = data.data.map((ev) => ({
-                type: "Sold",
-                price: ev.price,
-                nftId: ev.nftId || ev.tokenId || ev.id,
-                nftAddress: ev.collectionAddress,
-                saleTime: ev.blockTimestamp || ev.time,
-                listingId: ev.listingId,
-                currency: ev.currency || ev.currencyAddress,
-                nft: { image: ev.image, name: ev.name },
-              }));
-              console.debug(`[ebisus] fallback fetched ${list.length} sales`);
-            }
-          }
-        } catch (e) {
-          console.warn("[ebisus] backup fetch failed:", e);
-        }
+      // 2️⃣ If still empty, fallback to Moralis NFT API (last 10 sales)
+if (!list.length) {
+  try {
+    const MORALIS_BACKUP = `https://deep-index.moralis.io/api/v2/nft/${NFT_ADDRESS}/trade?chain=cronos&limit=10`;
+    const res = await fetch(MORALIS_BACKUP, {
+      headers: {
+        "X-API-Key": import.meta.env.VITE_MORALIS_KEY || "",
+      },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data?.result)) {
+        list = data.result.map((ev) => ({
+          type: "Sold",
+          price: ethers.formatUnits(ev.price, 18),
+          nftId: ev.token_id,
+          nftAddress: ev.token_address,
+          saleTime: Math.floor(ev.block_timestamp / 1000),
+          listingId: ev.transaction_hash,
+          currency: ev.payment_token_address,
+          nft: {
+            image: ev.token_image || PLACEHOLDER_SRC,
+            name: ev.token_name || `#${ev.token_id}`,
+          },
+        }));
+        console.debug(`[ebisus] fallback (Moralis) fetched ${list.length} sales`);
       }
+    }
+  } catch (e) {
+    console.warn("[ebisus] Moralis fallback failed:", e);
+  }
+}
 
       if (!list.length) return;
 
