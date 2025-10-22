@@ -14,7 +14,7 @@ export async function onRequestGet(context) {
     const limit = Number(urlObj.searchParams.get("limit")) || 10;
 
     // ✅ FIXED: use /trades and correct chain id (0x19 for Cronos Mainnet)
-    const url = `https://deep-index.moralis.io/api/v2/nft/${nftAddress}/trades?chain=0x19&limit=${limit}`;
+    const url = `https://deep-index.moralis.io/api/v2/nft/${nftAddress}/transfers?chain=cronos&limit=${limit}`;
 
     const res = await fetch(url, {
       headers: { "X-API-Key": moralisKey },
