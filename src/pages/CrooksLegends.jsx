@@ -601,21 +601,10 @@ useEffect(() => {
     console.warn("[ebisus] failed to load cached feed:", e);
   }
 
-  // 💾 Persist latest sales to localStorage
-  const persistFeed = (items) => {
-    try {
-      const MAX_SALES = 4;
-      const limited = items.slice(0, MAX_SALES);
-      localStorage.setItem("ebisuFeed", JSON.stringify(limited));
-    } catch (e) {
-      console.warn("[ebisus] failed to persist feed:", e);
-    }
-  };
-
   const handleEvent = (type) => (msg) => {
     let data = msg?.event ? msg.event : msg;
 
-    // If it's a string, parse JSON
+    // Parse stringified JSON
     if (typeof data === "string") {
       try {
         data = JSON.parse(data);
@@ -625,44 +614,39 @@ useEffect(() => {
       }
     }
 
+    // Some payloads are nested inside data.data
+    if (typeof data?.data === "string") {
+      try {
+        data = { ...data, ...JSON.parse(data.data) };
+      } catch {}
+    }
+
     console.debug("[ebisus] raw event received:", type, data);
 
-    const json =
-      typeof structuredClone === "function"
-        ? structuredClone(data)
-        : JSON.parse(JSON.stringify(data));
-
     const nftAddr =
-      json?.nft?.nftAddress?.toLowerCase?.() ||
-      json?.nftAddress?.toLowerCase?.() ||
-      json?.collectionAddress?.toLowerCase?.() ||
+      data?.nftAddress?.toLowerCase?.() ||
+      data?.nft?.nftAddress?.toLowerCase?.() ||
+      data?.collectionAddress?.toLowerCase?.() ||
+      data?.nft_contract?.toLowerCase?.() ||
       "";
 
     console.debug("[ebisus] extracted nftAddr:", nftAddr || "<empty>");
     console.debug("[ebisus] target addr:", addr);
 
-    if (nftAddr && (nftAddr === addr || nftAddr.endsWith(addr))) {
-      console.debug("[ebisus] ✅ MATCH — pushing to feed", type);
-      const normalized = normalizeEbisuEvent(type, json);
+    // ✅ accept even when nftAddr empty for debugging / fallback
+    const normalized = normalizeEbisuEvent(type, data);
+    if (!normalized) return;
 
-      // Add to state
-      addToFeed(setEbisuFeed, normalized);
+    addToFeed(setEbisuFeed, normalized);
 
-      // Save immediately after updating (slight delay to get the latest state)
-      setTimeout(() => {
-        persistFeed(
-          (function getCurrent() {
-            try {
-              const current = JSON.parse(localStorage.getItem("ebisuFeed") || "[]");
-              return [normalized, ...current].slice(0, 4);
-            } catch {
-              return [normalized];
-            }
-          })()
-        );
-      }, 300);
-    } else {
-      console.debug("[ebisus] 🚫 ignored event for other addr:", nftAddr || "<empty>");
+    // 💾 Persist latest few to localStorage
+    try {
+      const current = JSON.parse(localStorage.getItem("ebisuFeed") || "[]");
+      const updated = [normalized, ...current].slice(0, 4);
+      localStorage.setItem("ebisuFeed", JSON.stringify(updated));
+      console.debug("[ebisus] 💾 persisted feed:", updated.length);
+    } catch (e) {
+      console.warn("[ebisus] failed to persist feed:", e);
     }
   };
 
@@ -693,6 +677,7 @@ useEffect(() => {
     ].forEach((ev) => socket.off(ev));
   };
 }, []);
+
 
 
 
