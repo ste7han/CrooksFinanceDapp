@@ -770,12 +770,8 @@ if (RECENT_BASE) {
       // 2️⃣ If still empty, fallback to Moralis NFT API (last 10 sales)
 if (!list.length) {
   try {
-    const MORALIS_BACKUP = `https://deep-index.moralis.io/api/v2/nft/${NFT_ADDRESS}/trade?chain=cronos&limit=10`;
-    const res = await fetch(MORALIS_BACKUP, {
-      headers: {
-        "X-API-Key": import.meta.env.VITE_MORALIS_KEY || "",
-      },
-    });
+    const MORALIS_BACKUP = "/api/recent-sales";
+    const res = await fetch(MORALIS_BACKUP);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data?.result)) {
