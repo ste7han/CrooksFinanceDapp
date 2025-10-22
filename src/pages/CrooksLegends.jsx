@@ -770,7 +770,7 @@ if (RECENT_BASE) {
       // 2️⃣ If still empty, fallback to EbisuBay public API
       if (!list.length) {
         try {
-          const backup = "https://api.ebisusbay.com/api/v2/collection/cronos/crooks-legends/events?type=sold&limit=10";
+          const backup = "https://api.ebisusbay.com/api/v2/collections/cronos/crooks-legends/events?type=sold&limit=10";
           const res = await fetch(backup, { cache: "no-store" });
           if (res.ok) {
             const data = await res.json();
