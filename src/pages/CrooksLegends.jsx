@@ -777,7 +777,13 @@ if (!list.length) {
       if (Array.isArray(data?.result)) {
         list = data.result.map((ev) => ({
           type: "Sold",
-          price: ev.value ? ethers.formatUnits(ev.value, 18) : "0",
+          price: ev.price
+            ? ethers.formatUnits(ev.price, 18)
+            : ev.value
+            ? ethers.formatUnits(ev.value, 18)
+            : ev.amount
+            ? ethers.formatUnits(ev.amount, 18)
+            : "0",
           nftId: ev.token_id,
           nftAddress: ev.token_address,
           saleTime: Math.floor(new Date(ev.block_timestamp).getTime() / 1000),

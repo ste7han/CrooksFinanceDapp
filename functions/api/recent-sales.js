@@ -1,3 +1,5 @@
+import { ethers } from "ethers";
+
 export async function onRequestGet(context) {
   try {
     const nftAddress = "0x44102b7ab3e2b8edf77d188cd2b173ecbda60967";
@@ -13,7 +15,7 @@ export async function onRequestGet(context) {
     const urlObj = new URL(context.request.url);
     const limit = Number(urlObj.searchParams.get("limit")) || 10;
 
-    // ✅ FIXED: use /trades and correct chain id (0x19 for Cronos Mainnet)
+    // ✅ Using Moralis NFT transfers as backup
     const url = `https://deep-index.moralis.io/api/v2/nft/${nftAddress}/transfers?chain=cronos&limit=${limit}`;
 
     const res = await fetch(url, {
@@ -34,7 +36,35 @@ export async function onRequestGet(context) {
 
     const data = await res.json();
 
-    return new Response(JSON.stringify(data), {
+    // 🧠 Helper to format CRO units safely
+    const toEth = (val) => {
+      try {
+        return ethers.formatUnits(val || "0", 18);
+      } catch {
+        return "0";
+      }
+    };
+
+    // 🧩 Normalize structure for frontend
+    const list = Array.isArray(data?.result)
+      ? data.result.map((ev) => ({
+          type: "Sold",
+          price: toEth(ev.price || ev.value || ev.amount),
+          nftId: ev.token_id,
+          nftAddress: ev.token_address,
+          saleTime: Math.floor(
+            new Date(ev.block_timestamp).getTime() / 1000
+          ),
+          listingId: ev.transaction_hash,
+          currency: "CRO",
+          nft: {
+            image: ev.token_image || "",
+            name: ev.token_name || `#${ev.token_id}`,
+          },
+        }))
+      : [];
+
+    return new Response(JSON.stringify(list), {
       headers: {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
