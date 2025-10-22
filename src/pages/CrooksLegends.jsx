@@ -590,6 +590,21 @@ useEffect(() => {
   const addr = NFT_ADDRESS.toLowerCase();
   const socket = getEbisuSocket();
 
+  // 🧠 Load previous feed from localStorage
+  try {
+    const cached = JSON.parse(localStorage.getItem("ebisuFeed") || "[]");
+    if (Array.isArray(cached) && cached.length) {
+      setEbisuFeed(cached.slice(0, 4)); // toon max 4 bij start
+      console.debug("[ebisus] loaded cached feed:", cached.length);
+    }
+  } catch {}
+
+  const persistFeed = (items) => {
+    try {
+      localStorage.setItem("ebisuFeed", JSON.stringify(items.slice(0, 10)));
+    } catch {}
+  };
+
   const handleEvent = (type) => (msg) => {
     let data = msg?.event ? msg.event : msg;
 
