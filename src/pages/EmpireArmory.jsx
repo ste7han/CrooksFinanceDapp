@@ -46,6 +46,45 @@ const BTN_GHOST = `${BTN} bg-white/8 hover:bg-white/14 border border-white/12`;
 const BADGE = "inline-flex items-center gap-2 rounded-xl px-2 py-1 bg-white/8 border border-white/10 text-xs";
 
 // ===== Helpers =====
+// ---- Feed image hydration (cache + tokenURI + local fallback) ----
+const FEED_IMG_CACHE = new Map();
+
+async function resolveWeaponImageFromChain(id, readProvider) {
+  if (!readProvider) return null;
+  try {
+    const c = new ethers.Contract(WEAPON_NFT_ADDRESS, erc721Abi, readProvider);
+    const uri = await c.tokenURI(id);
+    const url = resolveMediaUrl(uri);
+    const meta = url ? await fetchJson(url) : null;
+    const img =
+      resolveMediaUrl(
+        meta?.image || meta?.image_url || meta?.animation_url
+      ) || null;
+    return img;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveWeaponImage(id, readProvider) {
+  if (!Number.isFinite(Number(id))) return null;
+  if (FEED_IMG_CACHE.has(id)) return FEED_IMG_CACHE.get(id);
+
+  let img = await resolveWeaponImageFromChain(id, readProvider);
+
+  // fallback: lokale metadata
+  if (!img) {
+    const localMeta = await fetchJson(`/metadata_weapons/${id}.json`);
+    img =
+      resolveMediaUrl(
+        localMeta?.image || localMeta?.image_url || localMeta?.animation_url
+      ) || null;
+  }
+
+  FEED_IMG_CACHE.set(id, img || null);
+  return img || null;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function resolveMediaUrl(u) {
   if (!u) return null;
@@ -80,22 +119,26 @@ function parseStrength(meta) {
   return Number.isFinite(n) ? n : 0;
 }
 
-// ---- Strength timeline persistence ----
-const HISTORY_KEY = "crooks:armory:strengthHistory";
-function loadStrengthHistory() {
+// ---- Strength timeline persistence (wallet-scoped) ----
+const HISTORY_KEY_BASE = "crooks:armory:strengthHistory";
+const historyKey = (addr) =>
+  `${HISTORY_KEY_BASE}:${(addr || "anon").toLowerCase()}`;
+
+function loadStrengthHistory(addr) {
   try {
-    const raw = localStorage.getItem(HISTORY_KEY);
+    const raw = localStorage.getItem(historyKey(addr));
     const arr = raw ? JSON.parse(raw) : [];
     return Array.isArray(arr) ? arr : [];
   } catch {
     return [];
   }
 }
-function saveStrengthHistory(arr) {
+function saveStrengthHistory(addr, arr) {
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(arr));
+    localStorage.setItem(historyKey(addr), JSON.stringify(arr));
   } catch {}
 }
+
 
 // ---- Sparkline generator (no libs) ----
 function Sparkline({ data, width = 560, height = 90, strokeWidth = 2 }) {
@@ -222,7 +265,7 @@ function normalizeEbisuEvent(type, ev) {
     nft.original_image ||
     nft.image_url ||
     nft.media?.[0]?.gateway_media_url ||
-    PLACEHOLDER_SRC;
+    null;
 
   const dedupeKey = String(
     ev.listingId ??
@@ -345,19 +388,32 @@ export default function EmpireArmory() {
     return copy;
   }, [items, sortStrengthDir]);
 
-  // --- strength history ---
-  const [strengthHistory, setStrengthHistory] = useState(() => loadStrengthHistory());
-  useEffect(() => {
-    if (!Number.isFinite(totalStrength)) return;
-    setStrengthHistory((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && last.total === totalStrength) return prev;
-      const next = [...prev, { t: Date.now(), total: totalStrength }];
-      if (next.length > 200) next.shift();
-      saveStrengthHistory(next);
-      return next;
-    });
-  }, [totalStrength]);
+ // wallet-scoped history
+const [strengthHistory, setStrengthHistory] = useState(() =>
+  loadStrengthHistory(address)
+);
+
+// als wallet wisselt → juiste history laden
+useEffect(() => {
+  setStrengthHistory(loadStrengthHistory(address));
+}, [address]);
+
+// alleen appenden wanneer er daadwerkelijk wapens/strength zijn
+useEffect(() => {
+  if (!address) return;                     // niet loggen als geen wallet
+  if (!Number.isFinite(totalStrength)) return;
+  if (items.length === 0) return;           // geen “0” punt bij disconnect/empty
+
+  setStrengthHistory((prev) => {
+    const last = prev[prev.length - 1];
+    if (last && last.total === totalStrength) return prev; // geen change
+    const next = [...prev, { t: Date.now(), total: totalStrength }];
+    if (next.length > 200) next.shift();
+    saveStrengthHistory(address, next);
+    return next;
+  });
+}, [address, totalStrength, items.length]);
+
 
   // ---- Discover owned weapons (Moralis → Enumerable) ----
   useEffect(() => {
@@ -449,14 +505,112 @@ export default function EmpireArmory() {
   }, [nft, address, readProvider]);
 
   // ---- Live EbisuBay feed (Socket + fallback) ----
-  const [feed, setFeed] = useState([]);
-  useEffect(() => {
-    const addr = WEAPON_NFT_ADDRESS.toLowerCase();
-    const socket = getEbisuSocket();
+const [feed, setFeed] = useState([]);
+useEffect(() => {
+  const addr = WEAPON_NFT_ADDRESS.toLowerCase();
+  const socket = getEbisuSocket();
 
-    const pushOne = (item) => {
+  const pushOne = (item) => {
+    setFeed((prev) => {
+      const merged = [item, ...prev];
+      const seen = new Set();
+      const uniq = [];
+      for (const it of merged) {
+        const key =
+          it.listingId ||
+          it.dedupeKey ||
+          it.txHash ||
+          `${it.type}:${it.nftId}:${it.price}:${it.time}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        uniq.push(it);
+        if (uniq.length >= 12) break;
+      }
+      uniq.sort((a, b) => (b.time || 0) - (a.time || 0));
+      return uniq;
+    });
+  };
+
+  const handleEvent = (type) => (msg) => {
+    let data = msg?.event ? msg.event : msg;
+    if (typeof data === "string") {
+      try { data = JSON.parse(data); } catch { return; }
+    }
+    const nftAddr =
+      data?.nft?.nftAddress?.toLowerCase?.() ||
+      data?.nftAddress?.toLowerCase?.() ||
+      data?.collectionAddress?.toLowerCase?.() ||
+      "";
+    if (!nftAddr || nftAddr !== addr) return;
+
+    const n = normalizeEbisuEvent(type, data);
+    if (n) {
+      pushOne(n);
+      if (!n.image && n.nftId) {
+        resolveWeaponImage(Number(n.nftId), readProvider).then((img) => {
+          if (!img) return;
+          setFeed((prev) =>
+            prev.map((x) => (x.dedupeKey === n.dedupeKey ? { ...x, image: img } : x))
+          );
+        });
+      }
+    }
+  };
+
+  [
+    "Listed","listed","Sold","sold",
+    "OfferMade","offerMade","CollectionOfferMade","collectionOfferMade",
+  ].forEach((ev) => socket.on(ev, handleEvent(ev)));
+
+  socket.on("connect", () => console.debug("[armory] ebisu connected"));
+  socket.on("disconnect", () => console.debug("[armory] ebisu disconnected"));
+
+  // Prefill from /recent then Moralis proxy (?address=)
+  (async () => {
+    let list = [];
+
+    try {
+      if (RECENT_BASE) {
+        const res = await fetch(RECENT_BASE, { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) list = data;
+        }
+      }
+    } catch {}
+
+    if (!list.length) {
+      try {
+        const u = new URL("/api/recent-sales", location.origin);
+        u.searchParams.set("address", WEAPON_NFT_ADDRESS);
+        const res = await fetch(u.toString(), { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.result)) {
+            list = data.result.map((ev) => ({
+              type: "Sold",
+              price: "0.00",
+              nftId: ev.token_id,
+              nftAddress: ev.token_address,
+              saleTime: Math.floor(new Date(ev.block_timestamp).getTime() / 1000),
+              listingId: ev.transaction_hash,
+              currency: "CRO",
+              nft: { name: `#${ev.token_id}` }, // no image; let hydrator fill it
+            }));
+          }
+        }
+      } catch (e) {
+        console.warn("[armory] Moralis fallback failed:", e);
+      }
+    }
+
+    if (list.length) {
+      const normalized = list
+        .map((ev) => normalizeEbisuEvent(ev.type || "Sold", ev))
+        .filter(Boolean);
+
       setFeed((prev) => {
-        const merged = [item, ...prev];
+        const merged = [...normalized, ...prev];
         const seen = new Set();
         const uniq = [];
         for (const it of merged) {
@@ -473,99 +627,29 @@ export default function EmpireArmory() {
         uniq.sort((a, b) => (b.time || 0) - (a.time || 0));
         return uniq;
       });
-    };
 
-    const handleEvent = (type) => (msg) => {
-      let data = msg?.event ? msg.event : msg;
-      if (typeof data === "string") {
-        try { data = JSON.parse(data); } catch { return; }
-      }
-      const nftAddr =
-        data?.nft?.nftAddress?.toLowerCase?.() ||
-        data?.nftAddress?.toLowerCase?.() ||
-        data?.collectionAddress?.toLowerCase?.() ||
-        "";
-      if (!nftAddr || nftAddr !== addr) return;
-
-      const n = normalizeEbisuEvent(type, data);
-      if (n) pushOne(n);
-    };
-
-    [
-      "Listed","listed","Sold","sold",
-      "OfferMade","offerMade","CollectionOfferMade","collectionOfferMade",
-    ].forEach((ev) => socket.on(ev, handleEvent(ev)));
-
-    socket.on("connect", () => console.debug("[armory] ebisu connected"));
-    socket.on("disconnect", () => console.debug("[armory] ebisu disconnected"));
-
-    // Prefill from /recent then Moralis proxy (?address=)
-    (async () => {
-      let list = [];
-
-      try {
-        if (RECENT_BASE) {
-          const res = await fetch(RECENT_BASE, { cache: "no-store" });
-          if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data)) list = data;
-          }
+      // ✅ Hydrate missing images (prefill) — now that `normalized` exists
+      normalized.forEach((it) => {
+        if (!it?.image && it?.nftId) {
+          resolveWeaponImage(Number(it.nftId), readProvider).then((img) => {
+            if (!img) return;
+            setFeed((prev) =>
+              prev.map((x) =>
+                x.dedupeKey === it.dedupeKey ? { ...x, image: img } : x
+              )
+            );
+          });
         }
-      } catch {}
+      });
+    }
+  })();
 
-      if (!list.length) {
-        try {
-          const u = new URL("/api/recent-sales", location.origin);
-          u.searchParams.set("address", WEAPON_NFT_ADDRESS);
-          const res = await fetch(u.toString(), { cache: "no-store" });
-          if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data?.result)) {
-              list = data.result.map((ev) => ({
-                type: "Sold",
-                price: "0.00", // transfers don’t include sale price
-                nftId: ev.token_id,
-                nftAddress: ev.token_address,
-                saleTime: Math.floor(new Date(ev.block_timestamp).getTime() / 1000),
-                listingId: ev.transaction_hash,
-                currency: "CRO",
-                nft: { image: PLACEHOLDER_SRC, name: `#${ev.token_id}` },
-              }));
-            }
-          }
-        } catch (e) {
-          console.warn("[armory] Moralis fallback failed:", e);
-        }
-      }
+  return () => {
+    ["Listed","listed","Sold","sold","OfferMade","offerMade","CollectionOfferMade","collectionOfferMade"]
+      .forEach((ev) => socket.off(ev));
+  };
+}, [readProvider]);
 
-      if (list.length) {
-        const normalized = list.map((ev) => normalizeEbisuEvent(ev.type || "Sold", ev)).filter(Boolean);
-        setFeed((prev) => {
-          const merged = [...normalized, ...prev];
-          const seen = new Set();
-          const uniq = [];
-          for (const it of merged) {
-            const key =
-              it.listingId ||
-              it.dedupeKey ||
-              it.txHash ||
-              `${it.type}:${it.nftId}:${it.price}:${it.time}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            uniq.push(it);
-            if (uniq.length >= 12) break;
-          }
-          uniq.sort((a, b) => (b.time || 0) - (a.time || 0));
-          return uniq;
-        });
-      }
-    })();
-
-    return () => {
-      ["Listed","listed","Sold","sold","OfferMade","offerMade","CollectionOfferMade","collectionOfferMade"]
-        .forEach((ev) => socket.off(ev));
-    };
-  }, []);
 
   return (
     <div
@@ -644,12 +728,17 @@ export default function EmpireArmory() {
                     title="View on Ebisu’s Bay"
                   >
                     <div className="w-10 h-10 rounded-lg overflow-hidden bg-white/10 border border-white/10 shrink-0">
-                      <img
-                        src={ev.image || PLACEHOLDER_SRC}
-                        alt={ev.name || (ev.nftId ? `#${ev.nftId}` : "NFT")}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
+                      {ev.image ? (
+                        <img
+                          src={ev.image}
+                          alt={ev.name || (ev.nftId ? `#${ev.nftId}` : "NFT")}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                          onError={(e) => { e.currentTarget.src = ""; }} // avoid broken icon if a gateway 404s
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-white/10" aria-label="loading..." />
+                      )}
                     </div>
                     <div className="text-xs leading-5 min-w-0">
                       <div className="opacity-90 truncate">
@@ -681,7 +770,7 @@ export default function EmpireArmory() {
                   onClick={() => {
                     const fresh = [{ t: Date.now(), total: totalStrength }];
                     setStrengthHistory(fresh);
-                    saveStrengthHistory(fresh);
+                    saveStrengthHistory(address, fresh);
                   }}
                 >
                   Reset
