@@ -1,9 +1,6 @@
 export async function onRequestGet(context) {
   try {
-    // NFT contract (Crooks Legends)
     const nftAddress = "0x44102b7ab3e2b8edf77d188cd2b173ecbda60967";
-
-    // Read your Cloudflare secret
     const moralisKey = context.env.MORALIS_KEY;
     if (!moralisKey) {
       return new Response(
@@ -12,14 +9,12 @@ export async function onRequestGet(context) {
       );
     }
 
-    // Optional: allow a limit query param like ?limit=20
     const urlObj = new URL(context.request.url);
     const limit = Number(urlObj.searchParams.get("limit")) || 10;
 
-    // Build Moralis URL
-    const url = `https://deep-index.moralis.io/api/v2/nft/${nftAddress}/trade?chain=cronos&limit=${limit}`;
+    // ✅ use /trades instead of /trade
+    const url = `https://deep-index.moralis.io/api/v2/nft/${nftAddress}/trades?chain=cronos&limit=${limit}`;
 
-    // Fetch from Moralis
     const res = await fetch(url, {
       headers: { "X-API-Key": moralisKey },
     });
@@ -38,11 +33,10 @@ export async function onRequestGet(context) {
 
     const data = await res.json();
 
-    // Return JSON to frontend
     return new Response(JSON.stringify(data), {
       headers: {
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*", // optional CORS
+        "Access-Control-Allow-Origin": "*",
         "Cache-Control": "no-store",
       },
     });
