@@ -777,18 +777,18 @@ if (!list.length) {
       if (Array.isArray(data?.result)) {
         list = data.result.map((ev) => ({
           type: "Sold",
-          price: ethers.formatUnits(ev.price, 18),
+          price: ev.value ? ethers.formatUnits(ev.value, 18) : "0",
           nftId: ev.token_id,
           nftAddress: ev.token_address,
-          saleTime: Math.floor(ev.block_timestamp / 1000),
+          saleTime: Math.floor(new Date(ev.block_timestamp).getTime() / 1000),
           listingId: ev.transaction_hash,
-          currency: ev.payment_token_address,
+          currency: "CRO",
           nft: {
-            image: ev.token_image || PLACEHOLDER_SRC,
-            name: ev.token_name || `#${ev.token_id}`,
+            image: PLACEHOLDER_SRC,
+            name: `#${ev.token_id}`,
           },
         }));
-        console.debug(`[ebisus] fallback (Moralis) fetched ${list.length} sales`);
+        console.debug(`[ebisus] fallback (Moralis transfers) fetched ${list.length} transfers`);
       }
     }
   } catch (e) {
