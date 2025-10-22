@@ -2,11 +2,20 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
 import { useWallet } from "../context/WalletContext";
+import { getEbisuSocket } from "../lib/ebisusSocket";
 
 // ====== CONFIG ======
 const WEAPON_NFT_ADDRESS = "0xB09b903403775Ac0e294B845bF157Bd6A5e8e329";
-const EBISUS_LINK = `https://app.ebisusbay.com/collection/${WEAPON_NFT_ADDRESS}?chain=cronos`;
+const EBISUS_LINK = `https://app.ebisusbay.com/collection/cronos/${WEAPON_NFT_ADDRESS}?chain=cronos`;
 const MINT_URL = "https://mint.crooks.finance/";
+const PLACEHOLDER_SRC = "/pictures/satoshi.png";
+
+// Optional envs (same pattern as Legends)
+const FEED_BASE = (import.meta.env.VITE_EBISUS_FEED_URL || "").trim();
+const RECENT_BASE = (
+  import.meta.env.VITE_EBISUS_RECENT_URL ||
+  (FEED_BASE ? `${FEED_BASE.replace(/\/+$/,"")}/recent` : "")
+).trim();
 
 // Minimal ABIs
 const erc721Abi = [
@@ -104,7 +113,6 @@ function Sparkline({ data, width = 560, height = 90, strokeWidth = 2 }) {
   const px = (x) =>
     padding + ((x - minX) / spanX) * (w - padding * 2);
   const py = (y) =>
-    // invert so larger values are higher on chart
     padding + (1 - (y - minY) / spanY) * (h - padding * 2);
 
   const d = data
@@ -133,15 +141,98 @@ function Sparkline({ data, width = 560, height = 90, strokeWidth = 2 }) {
         role="img"
         aria-label="Strength sparkline"
       >
-        {/* faint background line */}
         <path d={d} fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth={strokeWidth + 2} />
-        {/* main line */}
         <path d={d} fill="none" stroke="white" strokeOpacity="0.9" strokeWidth={strokeWidth} />
-        {/* last point */}
         <circle cx={px(last.t)} cy={py(last.total)} r="3.5" fill="white" />
       </svg>
     </div>
   );
+}
+
+// ---- Ebisu normalizer (same idea as Legends) ----
+function normalizeEbisuEvent(type, ev) {
+  if (!ev) return null;
+
+  const nft = ev.nft || {};
+  const rawId = String(
+    ev.nftId ?? ev.tokenId ?? nft.nftId ?? nft.tokenId ?? nft.edition ?? ""
+  );
+
+  const addrRaw = (
+    ev.nftAddress ??
+    nft.nftAddress ??
+    ev.collectionAddress ??
+    ""
+  ).toLowerCase();
+
+  const ts = Number(
+    ev.saleTime ??
+    ev.listingTime ??
+    ev.time ??
+    ev.event?.blockTimestamp ??
+    ev.event?.time ??
+    Date.now() / 1000
+  );
+
+  const price = (() => {
+    const p = ev.price ?? null;
+    if (p != null && !Number.isNaN(Number(p))) return Number(p).toFixed(2);
+    if (ev.priceWei) {
+      try { return Number(ethers.formatUnits(ev.priceWei, 18)).toFixed(2); }
+      catch { /* ignore */ }
+    }
+    return "0.00";
+  })();
+
+  const CRO_ZERO = "0x0000000000000000000000000000000000000000";
+  const MOON_ADDR = "0x46E2B5423F6ff46A8A35861EC9DAfF26af77AB9A".toLowerCase();
+  const currencyAddr = (
+    ev.currency ||
+    ev.currencyAddress ||
+    ev.currency_address ||
+    nft.currency ||
+    ev.paymentToken ||
+    ev.payment_token ||
+    ev.payment_token_address ||
+    ev.event?.currency ||
+    ev.event?.currencyAddress ||
+    ""
+  )?.toLowerCase?.() || "";
+  let currency = "CRO";
+  if (currencyAddr && currencyAddr !== CRO_ZERO) {
+    currency = currencyAddr === MOON_ADDR ? "MOON" : "CRO";
+  }
+
+  const permalink =
+    nft.market_uri ||
+    `https://app.ebisusbay.com/collection/cronos/${addrRaw}/${rawId}`;
+
+  const image =
+    nft.image ||
+    nft.original_image ||
+    nft.image_url ||
+    nft.media?.[0]?.gateway_media_url ||
+    PLACEHOLDER_SRC;
+
+  const dedupeKey = String(
+    ev.listingId ??
+    ev.txHash ??
+    `evt|${addrRaw}|${rawId}|${ev.priceWei ?? ev.price ?? ""}|${ts}`
+  );
+
+  return {
+    type,
+    listingId: ev.listingId,
+    nftId: rawId,
+    nftAddress: addrRaw,
+    name: nft.name || (rawId ? `#${rawId}` : ""),
+    image,
+    price,
+    time: ts,
+    uri: permalink,
+    dedupeKey,
+    currency,
+  };
 }
 
 export default function EmpireArmory() {
@@ -185,13 +276,11 @@ export default function EmpireArmory() {
   // --- strength history ---
   const [strengthHistory, setStrengthHistory] = useState(() => loadStrengthHistory());
   useEffect(() => {
-    // append when totalStrength changes meaningfully
     if (!Number.isFinite(totalStrength)) return;
     setStrengthHistory((prev) => {
       const last = prev[prev.length - 1];
-      if (last && last.total === totalStrength) return prev; // no change
+      if (last && last.total === totalStrength) return prev;
       const next = [...prev, { t: Date.now(), total: totalStrength }];
-      // cap length
       if (next.length > 200) next.shift();
       saveStrengthHistory(next);
       return next;
@@ -230,15 +319,13 @@ export default function EmpireArmory() {
           let img = null;
           let strength = 0;
 
-          // 1) tokenURI → fetch metadata
+          // tokenURI → fetch metadata
           let tokenUriJson = null;
           try {
             const uri = await nft.tokenURI(id);
             const url = resolveMediaUrl(uri);
             if (url) tokenUriJson = await fetchJson(url);
-          } catch {
-            // ignore
-          }
+          } catch {}
 
           if (tokenUriJson) {
             img =
@@ -250,7 +337,7 @@ export default function EmpireArmory() {
             strength = parseStrength(tokenUriJson);
           }
 
-          // 2) fallback: local metadata file
+          // fallback: local metadata
           if (strength === 0 || !img) {
             const localMeta = await fetchJson(`/metadata_weapons/${id}.json`);
             if (localMeta) {
@@ -268,11 +355,10 @@ export default function EmpireArmory() {
 
           results.push({
             id,
-            image: img || "/pictures/satoshi.png",
+            image: img || PLACEHOLDER_SRC,
             strength,
           });
 
-          // small delay to avoid hammering gateways
           await sleep(60);
         }
 
@@ -286,52 +372,123 @@ export default function EmpireArmory() {
     })();
   }, [nft, address]);
 
-  // ---- Live EbisuBay feed (SSE) ----
+  // ---- Live EbisuBay feed (Socket + fallback) ----
   const [feed, setFeed] = useState([]);
   useEffect(() => {
     const addr = WEAPON_NFT_ADDRESS.toLowerCase();
-    const es = new EventSource(`http://localhost:5174/events?addr=${addr}`);
+    const socket = getEbisuSocket();
 
-    const add = (item) =>
-      setFeed((prev) => [item, ...prev].slice(0, 12));
-
-    const normalize = (type, ev) => {
-      const nft = ev?.nft || ev;
-      const rawId = String(
-        ev?.nftId ??
-        ev?.tokenId ??
-        ev?.edition ??
-        nft?.nftId ??
-        nft?.tokenId ??
-        nft?.edition ??
-        ""
-      );
-      const addrRaw = nft?.nftAddress || ev?.nftAddress || "";
-      const ts = Number(ev?.saleTime || ev?.listingTime || ev?.time || 0);
-      const permalink =
-        nft?.market_uri ||
-        (addrRaw && rawId
-          ? `https://app.ebisusbay.com/collection/${addrRaw}/${rawId}`
-          : "");
-      return {
-        type,
-        nftId: rawId,
-        name: nft?.name || (rawId ? `#${rawId}` : ""),
-        image: nft?.image || nft?.original_image || "/pictures/satoshi.png",
-        price: ev?.price ?? (ev?.priceWei ? Number(ethers.formatUnits(ev.priceWei, 18)).toFixed(2) : undefined),
-        time: ts,
-        uri: permalink,
-      };
+    const pushOne = (item) => {
+      setFeed((prev) => {
+        const merged = [item, ...prev];
+        const seen = new Set();
+        const uniq = [];
+        for (const it of merged) {
+          const key =
+            it.listingId ||
+            it.dedupeKey ||
+            it.txHash ||
+            `${it.type}:${it.nftId}:${it.price}:${it.time}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          uniq.push(it);
+          if (uniq.length >= 12) break;
+        }
+        uniq.sort((a, b) => (b.time || 0) - (a.time || 0));
+        return uniq;
+      });
     };
 
-    es.onmessage = (e) => {
+    const handleEvent = (type) => (msg) => {
+      let data = msg?.event ? msg.event : msg;
+      if (typeof data === "string") {
+        try { data = JSON.parse(data); } catch { return; }
+      }
+      const nftAddr =
+        data?.nft?.nftAddress?.toLowerCase?.() ||
+        data?.nftAddress?.toLowerCase?.() ||
+        data?.collectionAddress?.toLowerCase?.() ||
+        "";
+      if (!nftAddr || nftAddr !== addr) return;
+
+      const n = normalizeEbisuEvent(type, data);
+      if (n) pushOne(n);
+    };
+
+    [
+      "Listed","listed","Sold","sold",
+      "OfferMade","offerMade","CollectionOfferMade","collectionOfferMade",
+    ].forEach((ev) => socket.on(ev, handleEvent(ev)));
+
+    socket.on("connect", () => console.debug("[armory] ebisu connected"));
+    socket.on("disconnect", () => console.debug("[armory] ebisu disconnected"));
+
+    // Prefill from /recent then Moralis proxy (?address=)
+    (async () => {
+      let list = [];
+
       try {
-        const payload = JSON.parse(e.data);
-        add(normalize("Event", payload));
+        if (RECENT_BASE) {
+          const res = await fetch(RECENT_BASE, { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data)) list = data;
+          }
+        }
       } catch {}
+
+      if (!list.length) {
+        try {
+          const u = new URL("/api/recent-sales", location.origin);
+          u.searchParams.set("address", WEAPON_NFT_ADDRESS);
+          const res = await fetch(u.toString(), { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data?.result)) {
+              list = data.result.map((ev) => ({
+                type: "Sold",
+                price: "0.00", // transfers don’t include sale price
+                nftId: ev.token_id,
+                nftAddress: ev.token_address,
+                saleTime: Math.floor(new Date(ev.block_timestamp).getTime() / 1000),
+                listingId: ev.transaction_hash,
+                currency: "CRO",
+                nft: { image: PLACEHOLDER_SRC, name: `#${ev.token_id}` },
+              }));
+            }
+          }
+        } catch (e) {
+          console.warn("[armory] Moralis fallback failed:", e);
+        }
+      }
+
+      if (list.length) {
+        const normalized = list.map((ev) => normalizeEbisuEvent(ev.type || "Sold", ev)).filter(Boolean);
+        setFeed((prev) => {
+          const merged = [...normalized, ...prev];
+          const seen = new Set();
+          const uniq = [];
+          for (const it of merged) {
+            const key =
+              it.listingId ||
+              it.dedupeKey ||
+              it.txHash ||
+              `${it.type}:${it.nftId}:${it.price}:${it.time}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            uniq.push(it);
+            if (uniq.length >= 12) break;
+          }
+          uniq.sort((a, b) => (b.time || 0) - (a.time || 0));
+          return uniq;
+        });
+      }
+    })();
+
+    return () => {
+      ["Listed","listed","Sold","sold","OfferMade","offerMade","CollectionOfferMade","collectionOfferMade"]
+        .forEach((ev) => socket.off(ev));
     };
-    es.onerror = (e) => console.warn("[armory ebisus] sse error", e);
-    return () => es.close();
   }, []);
 
   return (
@@ -344,7 +501,6 @@ export default function EmpireArmory() {
         backgroundAttachment: "fixed",
       }}
     >
-      {/* overlay for readability */}
       <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_70%_-10%,rgba(16,185,129,0.30),transparent_70%),linear-gradient(to_bottom,rgba(0,0,0,0.45),rgba(0,0,0,0.8))]" />
       <div className="relative max-w-6xl mx-auto p-6">
         {/* Header strip */}
@@ -387,7 +543,7 @@ export default function EmpireArmory() {
 
         {/* Top row — left = EbisuBay feed, right = Strength timeline */}
         <section className="mt-6 grid md:grid-cols-2 gap-5">
-          {/* EbisuBay feed (LEFT) */}
+          {/* Ebisu feed */}
           <div className={`${GLASS} ${SOFT_SHADOW} p-5`}>
             <div className="flex items-center justify-between">
               <h2 className="font-semibold text-lg">Market (Recent Sales/Listings)</h2>
@@ -404,7 +560,7 @@ export default function EmpireArmory() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {feed.map((ev, i) => (
                   <a
-                    key={`${ev.type}-${ev.nftId}-${i}`}
+                    key={ev.listingId ?? `${ev.type}-${ev.nftId}-${i}`}
                     href={ev.uri || EBISUS_LINK}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -413,7 +569,7 @@ export default function EmpireArmory() {
                   >
                     <div className="w-10 h-10 rounded-lg overflow-hidden bg-white/10 border border-white/10 shrink-0">
                       <img
-                        src={ev.image}
+                        src={ev.image || PLACEHOLDER_SRC}
                         alt={ev.name || (ev.nftId ? `#${ev.nftId}` : "NFT")}
                         className="w-full h-full object-cover"
                         loading="lazy"
@@ -423,7 +579,9 @@ export default function EmpireArmory() {
                       <div className="opacity-90 truncate">
                         {ev.type} • {ev.name || (ev.nftId ? `#${ev.nftId}` : "")}
                       </div>
-                      <div className="opacity-70">{ev.price ? `${ev.price} CRO` : ""}</div>
+                      <div className="opacity-70">
+                        {ev.price ? `${ev.price} ${ev.currency || "CRO"}` : ""}
+                      </div>
                     </div>
                   </a>
                 ))}
@@ -437,7 +595,7 @@ export default function EmpireArmory() {
             </div>
           </div>
 
-          {/* Strength timeline (RIGHT) */}
+          {/* Strength timeline */}
           <div className={`${GLASS} ${SOFT_SHADOW} p-5 flex flex-col`}>
             <div className="flex items-center justify-between">
               <h2 className="font-semibold text-lg">Strength timeline</h2>
@@ -465,7 +623,7 @@ export default function EmpireArmory() {
           </div>
         </section>
 
-        {/* Weapons BELOW the two squares */}
+        {/* Weapons */}
         <section className="mt-6">
           <div className="flex items-center justify-between">
             <h2 className="font-semibold text-lg">Your Weapons</h2>
@@ -502,7 +660,7 @@ export default function EmpireArmory() {
             ))}
           </div>
         </section>
-      </div> {/* end inner container */}
-    </div>   
+      </div>
+    </div>
   );
 }
