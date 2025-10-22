@@ -664,46 +664,67 @@ useEffect(() => {
   socket.on("connect", () => console.debug("[ebisus] connected to live feed"));
   socket.on("disconnect", () => console.debug("[ebisus] disconnected from live feed"));
 
-    // 🪄 Fallback: fetch the last 4 recent unique sales if feed is empty
-  if (!ebisuFeed.length && RECENT_BASE) {
-    (async () => {
-      try {
-        console.debug("[ebisus] fetching recent sales from:", RECENT_BASE);
-        const res = await fetch(RECENT_BASE, { cache: "no-store" });
-        if (!res.ok) return;
+// 🪄 Fallback: fetch the last 4 recent unique sales if feed is empty
+if (!ebisuFeed.length && RECENT_BASE) {
+  (async () => {
+    try {
+      console.debug("[ebisus] fetching recent sales from:", RECENT_BASE);
+      const res = await fetch(RECENT_BASE, { cache: "no-store" });
+      if (!res.ok) return;
 
-        const json = await res.json();
-        const arr = Array.isArray(json) ? json : [];
-        const normalized = arr
-          .map((ev) => normalizeEbisuEvent(ev.type || "Sold", ev))
-          .filter(Boolean);
+      const json = await res.json();
+      const arr = Array.isArray(json) ? json : [];
 
-        // 🧹 remove duplicates by unique listingId or dedupeKey
-        const seen = new Set();
-        const unique = [];
-        for (const n of normalized) {
-          const key = n.dedupeKey || n.listingId;
-          if (!key || seen.has(key)) continue;
-          seen.add(key);
-          unique.push(n);
-        }
+      const normalized = arr
+        .map((ev) => {
+          const n = normalizeEbisuEvent(ev.type || "Sold", ev);
+          if (!n) return null;
 
-        // sort newest first by time
-        unique.sort((a, b) => (b.time || 0) - (a.time || 0));
+          // 💰 currency fix — detect MOON vs CRO
+          const curAddr = (ev.currency || "").toLowerCase();
+          const isCro =
+            !curAddr ||
+            curAddr === "0x0000000000000000000000000000000000000000";
+          const isMoon =
+            curAddr === "0x46e2b5423f6ff46a8a35861ec9daff26af77ab9a".toLowerCase();
 
-        const limited = unique.slice(0, 4);
-        if (limited.length) {
-          setEbisuFeed(limited);
-          localStorage.setItem("ebisuFeed", JSON.stringify(limited));
-          console.debug(`[ebisus] prefilled ${limited.length} unique sales from /recent`);
-        } else {
-          console.debug("[ebisus] /recent returned no usable sales");
-        }
-      } catch (err) {
-        console.warn("[ebisus] could not fetch recent feed:", err);
+          n.currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
+          return n;
+        })
+        .filter(Boolean);
+
+      // 🧹 remove duplicates by listingId or transactionHash
+      const seen = new Set();
+      const unique = [];
+      for (const n of normalized) {
+        const key =
+          n.listingId ||
+          n.dedupeKey ||
+          n.txHash ||
+          `${n.type}:${n.nftId}:${n.price}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(n);
       }
-    })();
-  }
+
+      // sort newest first
+      unique.sort((a, b) => (b.time || 0) - (a.time || 0));
+
+      const limited = unique.slice(0, 4);
+      if (limited.length) {
+        setEbisuFeed(limited);
+        localStorage.setItem("ebisuFeed", JSON.stringify(limited));
+        console.debug(
+          `[ebisus] prefilled ${limited.length} unique sales from /recent`
+        );
+      } else {
+        console.debug("[ebisus] /recent returned no usable sales");
+      }
+    } catch (err) {
+      console.warn("[ebisus] could not fetch recent feed:", err);
+    }
+  })();
+}
 
 
 
@@ -1343,7 +1364,7 @@ useEffect(() => {
                           <div className="opacity-90 truncate">
                             {ev.type} • {ev.name || (ev.nftId ? `#${ev.nftId}` : "")}
                           </div>
-                          <div className="opacity-70">{ev.price ? `${ev.price} CRO` : ""}</div>
+                          <div className="opacity-70"> {ev.price ? `${ev.price} ${ev.currency || "CRO"}` : ""} </div>
                           <div className="opacity-50">{timeAgo(ev.time || 0)}</div>
                         </div>
                       </a>
