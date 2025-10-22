@@ -465,7 +465,6 @@ function normalizeEbisuEvent(type, ev) {
     ""
   ).toLowerCase();
 
-  // Use any timestamp we can find
   const ts = Number(
     ev.saleTime ??
     ev.listingTime ??
@@ -475,7 +474,6 @@ function normalizeEbisuEvent(type, ev) {
     Date.now() / 1000
   );
 
-  // Build link
   const permalink =
     nft.market_uri ||
     nft.last_sale?.uri ||
@@ -492,6 +490,24 @@ function normalizeEbisuEvent(type, ev) {
   const price = Number(
     ev.price ?? (ev.priceWei ? ethers.formatUnits(ev.priceWei, 18) : 0)
   ).toFixed(2);
+
+  // 💰 Currency detection (handles multiple structures)
+  const CRO_ZERO = "0x0000000000000000000000000000000000000000";
+  const MOON_ADDR = "0x46E2B5423F6ff46A8A35861EC9DAfF26af77AB9A".toLowerCase();
+
+  const currencyAddr = (
+    ev.currency ||
+    nft.currency ||
+    ev.paymentToken ||
+    ev.payment_token ||
+    ev.payment_token_address ||
+    ev.event?.currency ||
+    ""
+  ).toLowerCase();
+
+  const isCro = !currencyAddr || currencyAddr === CRO_ZERO;
+  const isMoon = currencyAddr === MOON_ADDR;
+  const currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
 
   const dedupeKey = String(
     ev.listingId ??
@@ -510,8 +526,10 @@ function normalizeEbisuEvent(type, ev) {
     time: ts,
     uri: permalink,
     dedupeKey,
+    currency, // ✅ attach currency directly here
   };
 }
+
 
 
 
@@ -701,7 +719,13 @@ useEffect(() => {
       try {
         const res = await fetch(RECENT_BASE, { cache: "no-store" });
         if (!res.ok) return;
-        const arr = await res.json();
+        let json;
+        try {
+          json = await res.json();
+        } catch {
+          console.warn("[ebisus] /recent returned non-JSON response");
+          return;
+        }
         const list = Array.isArray(arr) ? arr : [];
 
         const normalized = list
