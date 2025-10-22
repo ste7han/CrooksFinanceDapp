@@ -590,21 +590,59 @@ useEffect(() => {
   const addr = NFT_ADDRESS.toLowerCase();
   const socket = getEbisuSocket();
 
-  // 🧠 Load previous feed from localStorage
+  // 🧠 Load + scrub cached feed (dedupe + limit + re-save)
   try {
     const cached = JSON.parse(localStorage.getItem("ebisuFeed") || "[]");
     if (Array.isArray(cached) && cached.length) {
-      setEbisuFeed(cached.slice(0, 4)); // show up to 4 at start
-      console.debug("[ebisus] loaded cached feed:", cached.length);
+      // de-dupe by listingId / txHash / dedupeKey
+      const seen = new Set();
+      const unique = [];
+      for (const it of cached) {
+        const key = it.listingId || it.dedupeKey || it.txHash || `${it.type}:${it.nftId}:${it.price}:${it.time}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(it);
+        if (unique.length >= 4) break;
+      }
+      localStorage.setItem("ebisuFeed", JSON.stringify(unique));
+      setEbisuFeed(unique); // show up to 4 on start
+      console.debug("[ebisus] loaded cached feed:", unique.length);
     }
   } catch (e) {
     console.warn("[ebisus] failed to load cached feed:", e);
   }
 
+  const CRO_ZERO = "0x0000000000000000000000000000000000000000";
+  const MOON_ADDR = "0x46E2B5423F6ff46A8A35861EC9DAfF26af77AB9A".toLowerCase();
+
+  // 💾 helper to dedupe, sort, limit + persist
+  const updateFeed = (incoming) => {
+    setEbisuFeed((prev) => {
+      const merged = [incoming, ...prev];
+      const seen = new Set();
+      const unique = [];
+      for (const it of merged) {
+        const key =
+          it.listingId ||
+          it.dedupeKey ||
+          it.txHash ||
+          `${it.type}:${it.nftId}:${it.price}:${it.time}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(it);
+        if (unique.length >= FEED_LIMIT) break;
+      }
+      unique.sort((a, b) => (b.time || 0) - (a.time || 0));
+      const persist = unique.slice(0, 4);
+      try { localStorage.setItem("ebisusFeed", JSON.stringify(persist)); } catch {}
+      return unique;
+    });
+  };
+
   const handleEvent = (type) => (msg) => {
     let data = msg?.event ? msg.event : msg;
 
-    // Parse stringified JSON
+    // If the payload is a string, parse it
     if (typeof data === "string") {
       try {
         data = JSON.parse(data);
@@ -614,40 +652,33 @@ useEffect(() => {
       }
     }
 
-    // Some payloads are nested inside data.data
-    if (typeof data?.data === "string") {
-      try {
-        data = { ...data, ...JSON.parse(data.data) };
-      } catch {}
-    }
-
-    console.debug("[ebisus] raw event received:", type, data);
+    const json =
+      typeof structuredClone === "function"
+        ? structuredClone(data)
+        : JSON.parse(JSON.stringify(data));
 
     const nftAddr =
-      data?.nftAddress?.toLowerCase?.() ||
-      data?.nft?.nftAddress?.toLowerCase?.() ||
-      data?.collectionAddress?.toLowerCase?.() ||
-      data?.nft_contract?.toLowerCase?.() ||
+      json?.nft?.nftAddress?.toLowerCase?.() ||
+      json?.nftAddress?.toLowerCase?.() ||
+      json?.collectionAddress?.toLowerCase?.() ||
       "";
 
-    console.debug("[ebisus] extracted nftAddr:", nftAddr || "<empty>");
-    console.debug("[ebisus] target addr:", addr);
-
-    // ✅ accept even when nftAddr empty for debugging / fallback
-    const normalized = normalizeEbisuEvent(type, data);
-    if (!normalized) return;
-
-    addToFeed(setEbisuFeed, normalized);
-
-    // 💾 Persist latest few to localStorage
-    try {
-      const current = JSON.parse(localStorage.getItem("ebisuFeed") || "[]");
-      const updated = [normalized, ...current].slice(0, 4);
-      localStorage.setItem("ebisuFeed", JSON.stringify(updated));
-      console.debug("[ebisus] 💾 persisted feed:", updated.length);
-    } catch (e) {
-      console.warn("[ebisus] failed to persist feed:", e);
+    if (!nftAddr || (nftAddr !== addr && !nftAddr.endsWith(addr))) {
+      console.debug("[ebisus] 🚫 ignored event for other addr:", nftAddr || "<empty>");
+      return;
     }
+
+    // Normalize
+    const normalized = normalizeEbisuEvent(type, json);
+
+    // 💰 currency detection for LIVE events too
+    const curAddr = (json.currency || json.nft?.currency || "").toLowerCase();
+    const isCro = !curAddr || curAddr === CRO_ZERO;
+    const isMoon = curAddr === MOON_ADDR;
+    normalized.currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
+
+    // Update state + persist (deduped)
+    updateFeed(normalized);
   };
 
   [
@@ -664,69 +695,62 @@ useEffect(() => {
   socket.on("connect", () => console.debug("[ebisus] connected to live feed"));
   socket.on("disconnect", () => console.debug("[ebisus] disconnected from live feed"));
 
-// 🪄 Fallback: fetch the last 4 recent unique sales if feed is empty
-if (!ebisuFeed.length && RECENT_BASE) {
-  (async () => {
-    try {
-      console.debug("[ebisus] fetching recent sales from:", RECENT_BASE);
-      const res = await fetch(RECENT_BASE, { cache: "no-store" });
-      if (!res.ok) return;
+  // 🪄 Prefill from /recent if we still have nothing (unique, currency-aware)
+  if (RECENT_BASE) {
+    (async () => {
+      try {
+        const res = await fetch(RECENT_BASE, { cache: "no-store" });
+        if (!res.ok) return;
+        const arr = await res.json();
+        const list = Array.isArray(arr) ? arr : [];
 
-      const json = await res.json();
-      const arr = Array.isArray(json) ? json : [];
+        const normalized = list
+          .map((ev) => {
+            const n = normalizeEbisuEvent(ev.type || "Sold", ev);
+            if (!n) return null;
+            const curAddr = (ev.currency || "").toLowerCase();
+            const isCro = !curAddr || curAddr === CRO_ZERO;
+            const isMoon = curAddr === MOON_ADDR;
+            n.currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
+            return n;
+          })
+          .filter(Boolean);
 
-      const normalized = arr
-        .map((ev) => {
-          const n = normalizeEbisuEvent(ev.type || "Sold", ev);
-          if (!n) return null;
+        // de-dup + newest first
+        const seen = new Set();
+        const unique = [];
+        for (const n of normalized) {
+          const key = n.listingId || n.dedupeKey || n.txHash || `${n.type}:${n.nftId}:${n.price}:${n.time}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          unique.push(n);
+        }
+        unique.sort((a, b) => (b.time || 0) - (a.time || 0));
 
-          // 💰 currency fix — detect MOON vs CRO
-          const curAddr = (ev.currency || "").toLowerCase();
-          const isCro =
-            !curAddr ||
-            curAddr === "0x0000000000000000000000000000000000000000";
-          const isMoon =
-            curAddr === "0x46e2b5423f6ff46a8a35861ec9daff26af77ab9a".toLowerCase();
-
-          n.currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
-          return n;
-        })
-        .filter(Boolean);
-
-      // 🧹 remove duplicates by listingId or transactionHash
-      const seen = new Set();
-      const unique = [];
-      for (const n of normalized) {
-        const key =
-          n.listingId ||
-          n.dedupeKey ||
-          n.txHash ||
-          `${n.type}:${n.nftId}:${n.price}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        unique.push(n);
+        const limited = unique.slice(0, 4);
+        if (limited.length) {
+          // put into state and cache (but keep socket events able to add on top)
+          setEbisuFeed((prev) => {
+            const merged = [...limited, ...prev];
+            const mSeen = new Set();
+            const mUniq = [];
+            for (const it of merged) {
+              const key = it.listingId || it.dedupeKey || it.txHash || `${it.type}:${it.nftId}:${it.price}:${it.time}`;
+              if (mSeen.has(key)) continue;
+              mSeen.add(key);
+              mUniq.push(it);
+              if (mUniq.length >= FEED_LIMIT) break;
+            }
+            mUniq.sort((a, b) => (b.time || 0) - (a.time || 0));
+            try { localStorage.setItem("ebisusFeed", JSON.stringify(mUniq.slice(0, 4))); } catch {}
+            return mUniq;
+          });
+        }
+      } catch (err) {
+        console.warn("[ebisus] could not fetch recent feed:", err);
       }
-
-      // sort newest first
-      unique.sort((a, b) => (b.time || 0) - (a.time || 0));
-
-      const limited = unique.slice(0, 4);
-      if (limited.length) {
-        setEbisuFeed(limited);
-        localStorage.setItem("ebisuFeed", JSON.stringify(limited));
-        console.debug(
-          `[ebisus] prefilled ${limited.length} unique sales from /recent`
-        );
-      } else {
-        console.debug("[ebisus] /recent returned no usable sales");
-      }
-    } catch (err) {
-      console.warn("[ebisus] could not fetch recent feed:", err);
-    }
-  })();
-}
-
-
+    })();
+  }
 
   return () => {
     [
@@ -741,6 +765,7 @@ if (!ebisuFeed.length && RECENT_BASE) {
     ].forEach((ev) => socket.off(ev));
   };
 }, []);
+
 
 
 
