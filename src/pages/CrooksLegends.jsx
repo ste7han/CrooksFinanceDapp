@@ -594,59 +594,77 @@ useEffect(() => {
   try {
     const cached = JSON.parse(localStorage.getItem("ebisuFeed") || "[]");
     if (Array.isArray(cached) && cached.length) {
-      setEbisuFeed(cached.slice(0, 4)); // toon max 4 bij start
+      setEbisuFeed(cached.slice(0, 4)); // show up to 4 at start
       console.debug("[ebisus] loaded cached feed:", cached.length);
     }
-  } catch {}
+  } catch (e) {
+    console.warn("[ebisus] failed to load cached feed:", e);
+  }
 
+  // 💾 Persist latest sales to localStorage
   const persistFeed = (items) => {
     try {
-      localStorage.setItem("ebisuFeed", JSON.stringify(items.slice(0, 10)));
-    } catch {}
+      const MAX_SALES = 4;
+      const limited = items.slice(0, MAX_SALES);
+      localStorage.setItem("ebisuFeed", JSON.stringify(limited));
+    } catch (e) {
+      console.warn("[ebisus] failed to persist feed:", e);
+    }
   };
 
   const handleEvent = (type) => (msg) => {
     let data = msg?.event ? msg.event : msg;
 
-    // Als het een string is (zoals nu), parse het
+    // If it's a string, parse JSON
     if (typeof data === "string") {
       try {
         data = JSON.parse(data);
       } catch (e) {
-        console.warn("[ebisus] ⚠️ kon data niet parsen:", e, data);
+        console.warn("[ebisus] ⚠️ failed to parse data:", e, data);
         return;
       }
     }
 
-  console.debug("[ebisus] raw event received:", type, data);
+    console.debug("[ebisus] raw event received:", type, data);
 
-  // ✅ fix: forceer plain object
-  const json = typeof structuredClone === "function" ? structuredClone(data) : JSON.parse(JSON.stringify(data));
+    const json =
+      typeof structuredClone === "function"
+        ? structuredClone(data)
+        : JSON.parse(JSON.stringify(data));
 
-  const nftAddr =
-    json?.nft?.nftAddress?.toLowerCase?.() ||
-    json?.nftAddress?.toLowerCase?.() ||
-    json?.collectionAddress?.toLowerCase?.() ||
-    "";
+    const nftAddr =
+      json?.nft?.nftAddress?.toLowerCase?.() ||
+      json?.nftAddress?.toLowerCase?.() ||
+      json?.collectionAddress?.toLowerCase?.() ||
+      "";
 
-  console.debug("[ebisus] extracted nftAddr:", nftAddr || "<empty>");
-  console.debug("[ebisus] target addr:", addr);
+    console.debug("[ebisus] extracted nftAddr:", nftAddr || "<empty>");
+    console.debug("[ebisus] target addr:", addr);
 
-  if (nftAddr && (nftAddr === addr || nftAddr.endsWith(addr))) {
-    console.debug("[ebisus] ✅ MATCH — pushing to feed", type);
-    const normalized = normalizeEbisuEvent(type, json);
-    addToFeed(setEbisuFeed, normalized);
-  } else {
-    console.debug("[ebisus] 🚫 ignored event for other addr:", nftAddr || "<empty>");
-  }
-  console.debug("[ebisus] typeof data:", typeof data);
-  console.debug("[ebisus] keys:", Object.keys(data || {}));
-  console.debug("[ebisus] nftAddress (top):", data?.nftAddress);
-  console.debug("[ebisus] nft?.nftAddress:", data?.nft?.nftAddress);
-  console.debug("[ebisus] full nft:", data?.nft);
+    if (nftAddr && (nftAddr === addr || nftAddr.endsWith(addr))) {
+      console.debug("[ebisus] ✅ MATCH — pushing to feed", type);
+      const normalized = normalizeEbisuEvent(type, json);
 
-};
+      // Add to state
+      addToFeed(setEbisuFeed, normalized);
 
+      // Save immediately after updating (slight delay to get the latest state)
+      setTimeout(() => {
+        persistFeed(
+          (function getCurrent() {
+            try {
+              const current = JSON.parse(localStorage.getItem("ebisuFeed") || "[]");
+              return [normalized, ...current].slice(0, 4);
+            } catch {
+              return [normalized];
+            }
+          })()
+        );
+      }, 300);
+    } else {
+      console.debug("[ebisus] 🚫 ignored event for other addr:", nftAddr || "<empty>");
+    }
+  };
 
   [
     "Listed",
@@ -660,9 +678,7 @@ useEffect(() => {
   ].forEach((ev) => socket.on(ev, handleEvent(ev)));
 
   socket.on("connect", () => console.debug("[ebisus] connected to live feed"));
-  socket.on("disconnect", () =>
-    console.debug("[ebisus] disconnected from live feed")
-  );
+  socket.on("disconnect", () => console.debug("[ebisus] disconnected from live feed"));
 
   return () => {
     [
