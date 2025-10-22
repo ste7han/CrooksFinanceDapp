@@ -664,6 +664,31 @@ useEffect(() => {
   socket.on("connect", () => console.debug("[ebisus] connected to live feed"));
   socket.on("disconnect", () => console.debug("[ebisus] disconnected from live feed"));
 
+    // 🪄 Fallback: fetch the last 4 recent sales if feed is empty
+  if (!ebisuFeed.length && RECENT_BASE) {
+    (async () => {
+      try {
+        console.debug("[ebisus] fetching recent sales from:", RECENT_BASE);
+        const res = await fetch(RECENT_BASE, { cache: "no-store" });
+        if (res.ok) {
+          const json = await res.json();
+          const normalized = (Array.isArray(json) ? json : [])
+            .map((ev) => normalizeEbisuEvent(ev.type || "Sold", ev))
+            .filter(Boolean)
+            .slice(0, 4);
+          if (normalized.length) {
+            setEbisuFeed(normalized);
+            localStorage.setItem("ebisuFeed", JSON.stringify(normalized));
+            console.debug(`[ebisus] prefilled ${normalized.length} from /recent`);
+          }
+        }
+      } catch (err) {
+        console.warn("[ebisus] could not fetch recent feed:", err);
+      }
+    })();
+  }
+
+
   return () => {
     [
       "Listed",
