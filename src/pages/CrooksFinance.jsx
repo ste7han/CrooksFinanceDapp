@@ -67,13 +67,14 @@ function maybeStakeAdapter(symbol, pretty, stakeAddr, decimals = 18) {
 
 // type options: "balanceOf" | "chef" | "locked" | "vault4626"
 const STAKING_ADAPTERS = [
-  // MOON — balanceOf(address)
-  ...(STAKE.MOON ? [{
-    label: "MOON Staking",
-    type: "balanceOf",
-    contract: STAKE.MOON,
-    asset: { symbol: "MOON", address: TRACKED_TOKENS.MOON, decimals: 18 },
-  }] : []),
+// MOON — single-pool MasterChef-style (no pid): userInfo(address)
+...(STAKE.MOON ? [{
+  label: "MOON Staking",
+  type: "chef",                 // 👈 important change
+  contract: STAKE.MOON,         // 0x08A58e…f2F1b from your env
+  // no poolId on purpose → code will call userInfo(address)
+  asset: { symbol: "MOON", address: TRACKED_TOKENS.MOON, decimals: 18 },
+}] : []),
 
   // LION — either a 4626 vault or a MasterChef
   ...(STAKE.LION_VAULT ? [{
