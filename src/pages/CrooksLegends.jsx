@@ -453,8 +453,14 @@ function normalizeEbisuEvent(type, ev) {
   if (!ev) return null;
 
   const nft = ev.nft || {};
+
   const rawId = String(
-    ev.nftId ?? ev.tokenId ?? nft.nftId ?? nft.tokenId ?? nft.edition ?? ""
+    ev.nftId ??
+    ev.tokenId ??
+    nft.nftId ??
+    nft.tokenId ??
+    nft.edition ??
+    ""
   );
 
   const addrRaw = (
@@ -464,6 +470,7 @@ function normalizeEbisuEvent(type, ev) {
     ""
   ).toLowerCase();
 
+  // Timestamp
   const ts = Number(
     ev.saleTime ??
     ev.listingTime ??
@@ -473,12 +480,14 @@ function normalizeEbisuEvent(type, ev) {
     Date.now() / 1000
   );
 
+  // Permalink
   const permalink =
     nft.market_uri ||
     nft.last_sale?.uri ||
     nft.offer?.uri ||
     `https://app.ebisusbay.com/collection/cronos/${addrRaw}/${rawId}`;
 
+  // Image
   const image =
     nft.image ||
     nft.original_image ||
@@ -486,15 +495,15 @@ function normalizeEbisuEvent(type, ev) {
     nft.media?.[0]?.gateway_media_url ||
     PLACEHOLDER_SRC;
 
+  // Price (string -> fixed 2)
   const price = Number(
     ev.price ?? (ev.priceWei ? ethers.formatUnits(ev.priceWei, 18) : 0)
   ).toFixed(2);
 
-  // 💰 Currency detection (extended)
+  // -------- Currency detection (CRO vs MOON) --------
   const CRO_ZERO = "0x0000000000000000000000000000000000000000";
   const MOON_ADDR = "0x46E2B5423F6ff46A8A35861EC9DAfF26af77AB9A".toLowerCase();
 
-  // Search through multiple possible currency fields
   const currencyAddr = (
     ev.currency ||
     ev.currencyAddress ||
@@ -506,28 +515,43 @@ function normalizeEbisuEvent(type, ev) {
     ev.payment_token_address ||
     ev.event?.currency ||
     ev.event?.currencyAddress ||
+    ev.token?.currency ||
+    ev.market?.currency ||
     ""
-  ).toLowerCase();
+  )?.toLowerCase?.() || "";
 
-let isCro = !currencyAddr || currencyAddr === CRO_ZERO;
-let isMoon = currencyAddr === MOON_ADDR;
+  const numericPrice = Number(ev.price ?? 0);
 
-// 🩵 fallback: detecteer MOON als prijs extreem hoog of in bekend MOON-range
-const numericPrice = Number(ev.price ?? 0);
-if (!isMoon && numericPrice > 5000) {
-  // MOON sales zijn vaak 5k–20k
-  isMoon = true;
-  isCro = false;
-}
+  let currency;
+  if (!currencyAddr || currencyAddr === CRO_ZERO) {
+    currency = "CRO";
+  } else if (currencyAddr === MOON_ADDR) {
+    currency = "MOON";
+  } else {
+    // Heuristic fallback when Ebisu omits the token address
+    currency = numericPrice >= 5000 ? "MOON" : "CRO";
+  }
 
-const currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
+  // Optional: force-override known MOON listingId patterns
+  const lid = String(ev.listingId || "");
+  if (lid.startsWith("0x27a1") || lid.startsWith("0x3ba5")) {
+    currency = "MOON";
+  }
 
-
+  // Dedupe key
   const dedupeKey = String(
     ev.listingId ??
     ev.txHash ??
     `evt|${addrRaw}|${rawId}|${ev.priceWei ?? ev.price ?? ""}|${ts}`
   );
+
+  console.debug("[normalize] event", {
+    nftId: rawId,
+    price,
+    listingId: ev.listingId,
+    currencyAddr,
+    resolvedCurrency: currency,
+  });
 
   return {
     type,
@@ -540,7 +564,7 @@ const currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
     time: ts,
     uri: permalink,
     dedupeKey,
-    currency,
+    currency, // << use this in the UI
   };
 }
 
@@ -703,11 +727,7 @@ useEffect(() => {
     // Normalize
     const normalized = normalizeEbisuEvent(type, json);
 
-    // 💰 currency detection for LIVE events too
-    const curAddr = (json.currency || json.nft?.currency || "").toLowerCase();
-    const isCro = !curAddr || curAddr === CRO_ZERO;
-    const isMoon = curAddr === MOON_ADDR;
-    normalized.currency = isCro ? "CRO" : isMoon ? "MOON" : "UNK";
+    console.debug("[feed] added", normalized.nftId, normalized.price, normalized.currency);
 
     // Update state + persist (deduped)
     updateFeed(normalized);
@@ -740,7 +760,7 @@ useEffect(() => {
           console.warn("[ebisus] /recent returned non-JSON response");
           return;
         }
-        const list = Array.isArray(arr) ? arr : [];
+        const list = Array.isArray(json) ? json : [];
 
         const normalized = list
           .map((ev) => {
