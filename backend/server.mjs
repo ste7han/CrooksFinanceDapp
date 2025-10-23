@@ -119,19 +119,30 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 // All heists from DB
 app.get('/heists', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `select key, title, min_role, stamina_cost, recommended_strength,
-              token_drops_min, token_drops_max, amount_usd_min, amount_usd_max,
-              points_min, points_max, difficulty
-       from heists
-       order by stamina_cost, title`
-    );
+    const { rows } = await pool.query(`
+      select
+        key as id,
+        title,
+        min_role,
+        stamina_cost,
+        recommended_strength,
+        token_drops_min,
+        token_drops_max,
+        amount_usd_min::float as amount_usd_min,
+        amount_usd_max::float as amount_usd_max,
+        points_min,
+        points_max,
+        difficulty
+      from heists
+      order by stamina_cost, title;
+    `);
     res.json({ heists: rows });
   } catch (e) {
-    console.error(e);
+    console.error('[heists]', e);
     res.status(500).json({ error: 'Failed to load heists' });
   }
 });
+
 
 // Me & quick snapshots
 app.get('/me', (req, res) => {
