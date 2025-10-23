@@ -1,3 +1,4 @@
+// backend/worker.mjs
 import { createClient } from "@supabase/supabase-js";
 
 // Lock CORS to your Pages domain
@@ -8,7 +9,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Wallet-Address",
 };
 
-// Allow only the tokens in your economy
+// Only track tokens in your economy
 const ALLOWED_TOKENS = new Set([
   "CRO", "CRKS", "MOON", "KRIS", "BONE", "BOBZ", "CRY", "CROCARD",
 ]);
@@ -31,31 +32,58 @@ function getWalletLower(request) {
   return /^0x[a-fA-F0-9]{40}$/.test(w) ? w.toLowerCase() : null;
 }
 
-async function ensureUser(supabase, wallet) {
-  await supabase.from("users").upsert({ wallet }, { onConflict: "wallet" });
+// --- DB helpers (user_id schema) ---
+async function getOrCreateUserId(supabase, walletLower) {
+  // upsert by wallet_address; return id
+  const { data, error } = await supabase
+    .from("users")
+    .upsert({ wallet_address: walletLower }, { onConflict: "wallet_address" })
+    .select("id,wallet_address")
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data.id;
 }
 
-async function addLedgerAndUpsertBalance(supabase, wallet, symbol, delta, reason, ref) {
-  // 1) ledger
-  const { error: ledErr } = await supabase
-    .from("token_ledger")
-    .insert({ wallet, token_symbol: symbol, amount: delta, reason: reason || "reward", ref: ref || null });
-  if (ledErr) throw new Error(ledErr.message);
+async function addLedgerAndUpsertBalanceByUserId(
+  supabase,
+  userId,
+  symbol,
+  delta,
+  reason,
+  refId
+) {
+  // 1) ledger insert
+  {
+    const { error } = await supabase.from("token_ledger").insert({
+      user_id: userId,
+      token_symbol: symbol,
+      amount: delta,
+      reason: reason || "reward",
+      ref_id: refId ?? null,
+    });
+    if (error) throw new Error(error.message);
+  }
 
-  // 2) balance upsert (simple read-modify-write; good enough now)
+  // 2) read-modify-write balance
   const { data: cur, error: selErr } = await supabase
     .from("token_balances")
     .select("balance")
-    .eq("wallet", wallet)
+    .eq("user_id", userId)
     .eq("token_symbol", symbol)
     .single();
 
+  // PGRST116 = "Results contain 0 rows" (not found) → that's fine for first insert
   if (selErr && selErr.code !== "PGRST116") throw new Error(selErr.message);
+
   const newBal = (Number(cur?.balance) || 0) + Number(delta);
 
   const { error: upErr } = await supabase
     .from("token_balances")
-    .upsert({ wallet, token_symbol: symbol, balance: newBal }, { onConflict: "wallet,token_symbol" });
+    .upsert(
+      { user_id: userId, token_symbol: symbol, balance: newBal },
+      { onConflict: "user_id,token_symbol" }
+    );
 
   if (upErr) throw new Error(upErr.message);
   return newBal;
@@ -63,7 +91,9 @@ async function addLedgerAndUpsertBalance(supabase, wallet, symbol, delta, reason
 
 export default {
   async fetch(request, env) {
-    if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders });
+    }
 
     const url = new URL(request.url);
     const path = url.pathname;
@@ -84,92 +114,165 @@ export default {
     if (path === "/api/heists" && request.method === "GET") {
       const { data, error } = await supabase
         .from("heists")
-        .select("key,title,min_role,stamina_cost,recommended_strength,token_drops_min,token_drops_max,amount_usd_min,amount_usd_max,points_min,points_max,difficulty")
+        .select(
+          "key,title,min_role,stamina_cost,recommended_strength,token_drops_min,token_drops_max,amount_usd_min,amount_usd_max,points_min,points_max,difficulty"
+        )
         .order("stamina_cost", { ascending: true })
         .order("title", { ascending: true });
       if (error) return json({ error: error.message }, 500);
       return json({ heists: data ?? [] });
     }
 
-    // --- upsert user ---
+    // --- upsert user (by wallet_address) ---
     if (path === "/api/me" && request.method === "POST") {
       const { wallet } = await request.json().catch(() => ({}));
-      if (!/^0x[a-fA-F0-9]{40}$/.test(wallet || "")) return json({ error: "Invalid wallet" }, 400);
+      if (!/^0x[a-fA-F0-9]{40}$/.test(wallet || "")) {
+        return json({ error: "Invalid wallet" }, 400);
+      }
       const lower = wallet.toLowerCase();
       const { data, error } = await supabase
         .from("users")
-        .upsert({ wallet: lower }, { onConflict: "wallet" })
-        .select()
+        .upsert({ wallet_address: lower }, { onConflict: "wallet_address" })
+        .select("id,wallet_address")
         .single();
+
       if (error) return json({ error: error.message }, 500);
-      return json({ user: data });
+      return json({ user: { id: data.id, wallet: data.wallet_address } });
     }
 
-    // --- balances ---
+    // --- balances (by user_id) ---
     if (path === "/api/me/balances" && request.method === "GET") {
       const wallet = getWalletLower(request);
       if (!wallet) return json({ error: "Missing or invalid wallet" }, 400);
+
+      let userId;
+      try {
+        userId = await getOrCreateUserId(supabase, wallet);
+      } catch (e) {
+        return json({ error: e.message || "User upsert failed" }, 500);
+      }
+
       const { data, error } = await supabase
         .from("token_balances")
         .select("token_symbol,balance,updated_at")
-        .eq("wallet", wallet)
+        .eq("user_id", userId)
         .order("token_symbol");
+
       if (error) return json({ error: error.message }, 500);
-      // optionally filter to only allowed set (in case legacy rows exist)
-      const rows = (data || []).filter(r => ALLOWED_TOKENS.has(String(r.token_symbol).toUpperCase()));
-      return json({ wallet, balances: rows });
+
+      const rows = (data || []).filter((r) =>
+        ALLOWED_TOKENS.has(String(r.token_symbol).toUpperCase())
+      );
+      return json({ wallet, user_id: userId, balances: rows });
     }
 
-    // --- ledger ---
+    // --- ledger (by user_id) ---
     if (path === "/api/me/ledger" && request.method === "GET") {
       const wallet = getWalletLower(request);
       if (!wallet) return json({ error: "Missing or invalid wallet" }, 400);
-      const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit") || 50)));
+
+      let userId;
+      try {
+        userId = await getOrCreateUserId(supabase, wallet);
+      } catch (e) {
+        return json({ error: e.message || "User upsert failed" }, 500);
+      }
+
+      const limit = Math.max(
+        1,
+        Math.min(200, Number(url.searchParams.get("limit") || 50))
+      );
+
       const { data, error } = await supabase
         .from("token_ledger")
-        .select("id,token_symbol,amount,reason,ref,created_at")
-        .eq("wallet", wallet)
+        .select("id,token_symbol,amount,reason,ref_id,created_at")
+        .eq("user_id", userId)
         .order("id", { ascending: false })
         .limit(limit);
+
       if (error) return json({ error: error.message }, 500);
-      return json({ wallet, ledger: data ?? [] });
+      return json({ wallet, user_id: userId, ledger: data ?? [] });
     }
 
-    // --- single reward (still available) ---
+    // --- single reward (server-authoritative) ---
+    // body: { wallet, token, amount, reason?, ref_id? }
     if (path === "/api/reward" && request.method === "POST") {
-      const { wallet, token, amount, reason, ref } = await request.json().catch(() => ({}));
-      if (!/^0x[a-fA-F0-9]{40}$/.test(wallet || "")) return json({ error: "Invalid wallet" }, 400);
-      const sym = String(token || "").toUpperCase();
-      if (!ALLOWED_TOKENS.has(sym)) return json({ error: `Token not allowed: ${sym}` }, 400);
-      const delta = Number(amount);
-      if (!Number.isFinite(delta)) return json({ error: "Invalid amount" }, 400);
+      const { wallet, token, amount, reason, ref_id } =
+        await request.json().catch(() => ({}));
 
-      const w = wallet.toLowerCase();
-      await ensureUser(supabase, w);
-      const balance = await addLedgerAndUpsertBalance(supabase, w, sym, delta, reason, ref);
-      return json({ ok: true, wallet: w, token: sym, balance });
+      if (!/^0x[a-fA-F0-9]{40}$/.test(wallet || "")) {
+        return json({ error: "Invalid wallet" }, 400);
+      }
+      const sym = String(token || "").toUpperCase();
+      if (!ALLOWED_TOKENS.has(sym))
+        return json({ error: `Token not allowed: ${sym}` }, 400);
+      const delta = Number(amount);
+      if (!Number.isFinite(delta))
+        return json({ error: "Invalid amount" }, 400);
+
+      let userId;
+      try {
+        userId = await getOrCreateUserId(supabase, wallet.toLowerCase());
+        const balance = await addLedgerAndUpsertBalanceByUserId(
+          supabase,
+          userId,
+          sym,
+          delta,
+          reason,
+          ref_id
+        );
+        return json({
+          ok: true,
+          wallet: wallet.toLowerCase(),
+          user_id: userId,
+          token: sym,
+          balance,
+        });
+      } catch (e) {
+        return json({ error: e.message || "Reward failed" }, 500);
+      }
     }
 
     // --- batch reward (preferred for heists) ---
-    // body: { wallet: "0x...", rewards: { "CRO": 0.12, "MOON": 500, ... }, reason?: string, ref?: string }
+    // body: { wallet: "0x...", rewards: { "CRO": 0.12, "MOON": 500, ... }, reason?: string, ref_id?: number }
     if (path === "/api/rewardBatch" && request.method === "POST") {
-      const { wallet, rewards, reason, ref } = await request.json().catch(() => ({}));
-      if (!/^0x[a-fA-F0-9]{40}$/.test(wallet || "")) return json({ error: "Invalid wallet" }, 400);
-      if (!rewards || typeof rewards !== "object") return json({ error: "Missing rewards map" }, 400);
+      const { wallet, rewards, reason, ref_id } = await request
+        .json()
+        .catch(() => ({}));
 
-      const w = wallet.toLowerCase();
-      await ensureUser(supabase, w);
-
-      const results = {};
-      for (const [rawSym, rawAmt] of Object.entries(rewards)) {
-        const sym = String(rawSym).toUpperCase();
-        if (!ALLOWED_TOKENS.has(sym)) continue; // silently skip unknown tokens
-        const delta = Number(rawAmt);
-        if (!Number.isFinite(delta) || delta === 0) continue;
-        const bal = await addLedgerAndUpsertBalance(supabase, w, sym, delta, reason || "heist_reward", ref || null);
-        results[sym] = bal;
+      if (!/^0x[a-fA-F0-9]{40}$/.test(wallet || "")) {
+        return json({ error: "Invalid wallet" }, 400);
       }
-      return json({ ok: true, wallet: w, balances: results });
+      if (!rewards || typeof rewards !== "object") {
+        return json({ error: "Missing rewards map" }, 400);
+      }
+
+      try {
+        const w = wallet.toLowerCase();
+        const userId = await getOrCreateUserId(supabase, w);
+
+        const results = {};
+        for (const [rawSym, rawAmt] of Object.entries(rewards)) {
+          const sym = String(rawSym).toUpperCase();
+          if (!ALLOWED_TOKENS.has(sym)) continue; // ignore unknown tokens
+          const delta = Number(rawAmt);
+          if (!Number.isFinite(delta) || delta === 0) continue;
+
+          const bal = await addLedgerAndUpsertBalanceByUserId(
+            supabase,
+            userId,
+            sym,
+            delta,
+            reason || "heist_reward",
+            ref_id ?? null
+          );
+          results[sym] = bal;
+        }
+
+        return json({ ok: true, wallet: w, user_id: userId, balances: results });
+      } catch (e) {
+        return json({ error: e.message || "Batch reward failed" }, 500);
+      }
     }
 
     return json({ error: "Not found" }, 404);
