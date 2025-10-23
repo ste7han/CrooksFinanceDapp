@@ -34,7 +34,7 @@ export default {
 
     // GET /api/health -> test DB-toegang
     if (path === "/api/health" && request.method === "GET") {
-      const { error } = await supabase.from("heists").select("id").limit(1);
+      const { error } = await supabase.from("heists").select("key").limit(1);
       if (error) return json({ ok: false, error: error.message }, 500);
       return json({ ok: true });
     }
