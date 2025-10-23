@@ -3,6 +3,9 @@ import { ethers } from "ethers";
 
 const WalletContext = createContext();
 
+// ⚙️ Add your API base here
+const API_BASE = import.meta.env.VITE_API_BASE;
+
 export function WalletProvider({ children }) {
   const [provider, setProvider] = useState(null);
   const [signer, setSigner] = useState(null);
@@ -50,13 +53,31 @@ export function WalletProvider({ children }) {
       const accounts = await provider.send("eth_requestAccounts", []);
       const _signer = await provider.getSigner();
       setSigner(_signer);
-      setAddress(accounts[0]);
+      const addr = accounts[0];
+      setAddress(addr);
+
+      // switch to Cronos if needed
       const net = await provider.getNetwork();
       if (Number(net.chainId) !== 25) {
         await window.ethereum.request({
           method: "wallet_addEthereumChain",
           params: [CRONOS_PARAMS],
         });
+      }
+
+      // ✅ ensure user exists in backend
+      if (API_BASE && addr) {
+        try {
+          const res = await fetch(`${API_BASE}/api/me`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ wallet: addr }),
+          });
+          const json = await res.json();
+          console.log("[Crooks] user sync:", json);
+        } catch (err) {
+          console.warn("[Crooks] failed to sync user:", err);
+        }
       }
     } catch (e) {
       console.error(e);

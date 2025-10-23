@@ -22,6 +22,8 @@ const WEAPON_NFT_ADDRESS = (import.meta.env.VITE_WEAPON_NFT_ADDRESS ||
   "0xB09b903403775Ac0e294B845bF157Bd6A5e8e329").trim();
 
 const CRKS_ADDRESS = (import.meta.env.VITE_CRKS_CA || "").trim(); // set in .env to enable multiplier
+const API_BASE = import.meta.env.VITE_BACKEND_URL || "https://crooks-backend.steph-danser.workers.dev";
+
 
 
 const ERC721_ABI = [
@@ -175,6 +177,9 @@ const BADGE = "inline-flex items-center gap-2 rounded-xl px-2 py-1 bg-white/8 bo
 export default function EmpireProfile() {
   const { provider, address, networkOk } = useWallet();
 
+  // 🆕 Balances from backend (Supabase)
+  const [backendBalances, setBackendBalances] = useState([]);
+
   // Empire store (local game state; persisted via localStorage)
   const {
     state: empire,
@@ -192,8 +197,43 @@ export default function EmpireProfile() {
 
   // Hydrate store with connected wallet (helps later for backend linking)
   useEffect(() => {
-    if (address) hydrateFromWallet(address);
-  }, [address, hydrateFromWallet]);
+  if (!address) return;
+
+  // 1) hydrate local Empire state
+  hydrateFromWallet(address);
+
+  // 2) ensure backend user exists
+  (async () => {
+    try {
+      await fetch(`${API_BASE}/api/me`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ wallet: address }),
+      });
+      console.log("[backend] ensured user exists:", address);
+    } catch (e) {
+      console.warn("[backend] user sync failed:", e);
+    }
+  })();
+}, [address, hydrateFromWallet]);
+
+
+  // make this a separate top-level effect (not nested)
+  useEffect(() => {
+    if (!address) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/me/balances`, {
+          headers: { "X-Wallet-Address": address },
+        });
+        const j = await res.json();
+        console.log("[backend] balances:", j);
+        // set state here (next section)
+      } catch (e) {
+        console.warn("Failed to load backend balances:", e);
+      }
+    })();
+  }, [address]);
 
   const [readProvider, setReadProvider] = useState(null);
 
@@ -536,13 +576,20 @@ export default function EmpireProfile() {
         {/* Empire stats */}
         <section className="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className={`${GLASS} ${SOFT_SHADOW} p-5 lg:col-span-2`}>
-            <h3 className="font-semibold text-lg">Crooks Empire — Total Tokens Earned</h3>
-            <p className="text-xs opacity-70 mt-1">These are stored locally now; later we’ll sync with your backend.</p>
-            <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {Object.entries(stats.tokensEarned).map(([sym, val]) => (
-                <StatTile key={sym} label={sym} value={formatInt(val)} />
-              ))}
-            </div>
+            <h3 className="font-semibold text-lg">Balances (from backend)</h3>
+            <p className="text-xs opacity-70 mt-1">
+              Live balances from Supabase via your Cloudflare Worker.
+            </p>
+
+            {backendBalances.length === 0 ? (
+              <div className="mt-3 text-sm opacity-70">No balances yet.</div>
+            ) : (
+              <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {backendBalances.map(r => (
+                  <StatTile key={r.token_symbol} label={r.token_symbol} value={Number(r.balance).toLocaleString()} />
+                ))}
+              </div>
+            )}
           </div>
 
           <div className={`${GLASS} ${SOFT_SHADOW} p-5`}>

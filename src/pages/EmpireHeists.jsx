@@ -45,6 +45,23 @@ const ERC20_ABI = [
   "function decimals() view returns (uint8)",
 ];
 
+// === Backend ===
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "https://crooks-backend.steph-danser.workers.dev").replace(/\/$/, "");
+async function apiFetch(path, { method = "GET", body, wallet } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  // we send the wallet so the worker can auth the request
+  if (wallet) headers.Authorization = `Bearer ${wallet}`;
+  const r = await fetch(`${BACKEND_URL}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j?.error || `Request failed: ${r.status}`);
+  return j;
+}
+
+
 // ===== Rank thresholds (your latest ladder) =====
 const RANKS = [
   { id: 1,  name: "Prospect",       min: 0   },
@@ -303,6 +320,22 @@ async function onPlay(key) {
 
     // succes-case
     awardTokens?.(res.rewards, { addFactionPoints: res.pointsChange });
+    // NEW: persist to backend
+    try {
+      await apiFetch("/api/rewardBatch", {
+        method: "POST",
+        wallet: address, // from useWallet()
+        body: {
+          wallet: address,
+          rewards: res.rewards,          // e.g. { CRKS: 123, MOON: 456 }
+          reason: "heist_reward",
+          ref: `heist:${key}`,           // useful reference
+        },
+      });
+    } catch (e) {
+      console.warn("[backend] rewardBatch failed:", e?.message);
+      // UX idea: optionally show a toast: "Saved locally, backend sync failed"
+    }
     recordHeist?.("win");
     setResult({
       success: true,
