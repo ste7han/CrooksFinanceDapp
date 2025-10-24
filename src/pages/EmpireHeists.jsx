@@ -38,40 +38,53 @@ const ERC20_ABI = [
 ];
 
 // === Backend ===
-// Prefer local Pages function (wrangler dev) if present, else the Worker URL.
-const BACKEND_URL = (
+const BACKEND_BASE = (
   import.meta.env.VITE_PAGES_API ||
   import.meta.env.VITE_BACKEND_URL ||
   ""
 ).replace(/\/$/, "");
 
-async function apiFetch(path, { method = "GET", body, wallet } = {}) {
-  if (!BACKEND_URL) throw new Error("Backend URL not configured");
+async function fetchJsonWithFallback(paths, { method = "GET", body, wallet } = {}) {
   const headers = { "Content-Type": "application/json" };
-  // Use same header style as /api/me/stamina
   if (wallet) headers["X-Wallet-Address"] = wallet;
-  const r = await fetch(`${BACKEND_URL}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const txt = await r.text();
-  let j = {};
-  if (txt) {
-    try { j = JSON.parse(txt); } catch { /* leave as {} */ }
+
+  let lastErr;
+  for (const path of paths) {
+    try {
+      if (!BACKEND_BASE && !path.startsWith("/")) throw new Error("Backend URL not configured");
+      const url = `${BACKEND_BASE}${path}`;
+      const r = await fetch(url, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        cache: "no-store",
+      });
+      const txt = await r.text();
+      const j = txt ? JSON.parse(txt) : {};
+      if (!r.ok) throw new Error(j?.error || `Request failed: ${r.status}`);
+      return j;
+    } catch (e) {
+      lastErr = e;
+    }
   }
-  if (!r.ok) throw new Error(j?.error || `Request failed: ${r.status}`);
-  return j;
+  throw lastErr || new Error("All backend paths failed");
+}
+
+async function apiFetch(path, opts = {}) {
+  // probeer /api/... en fallback naar /...
+  const clean = path.replace(/^\/+/, "");
+  return fetchJsonWithFallback([`/api/${clean}`, `/${clean}`], opts);
 }
 
 // Authoritative stamina spend on the server
 async function apiSpendStamina(amount, wallet) {
-  return apiFetch("/api/me/stamina/spend", {
+  return apiFetch("me/stamina/spend", {
     method: "POST",
     wallet,
     body: { amount: Number(amount || 0) },
   });
 }
+
 
 // ===== Rank thresholds (NFT count → rank name) =====
 const RANKS = [

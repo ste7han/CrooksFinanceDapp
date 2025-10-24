@@ -165,7 +165,7 @@ export function EmpireProvider({ children }) {
     setState((prev) => ({ ...prev, factionPointsMonth: 0 }));
   }, []);
 
-  /* ---------- backend stamina fetch (defensive parse) ---------- */
+  /* ---------- backend stamina fetch (defensive parse + fallback) ---------- */
   const refreshStamina = useCallback(async () => {
     try {
       if (!address) {
@@ -176,22 +176,35 @@ export function EmpireProvider({ children }) {
         return;
       }
 
-      // Use same-origin Pages Functions by default
-      const url = `${PAGES_API}/api/me/stamina`;
-      const res = await fetch(url, {
-        headers: { "X-Wallet-Address": address },
-        cache: "no-store",
-      });
+      // Probeer beide routes: /api/me/stamina en /me/stamina
+      const base = (PAGES_API || "").replace(/\/$/, "");
+      const candidates = [`${base}/api/me/stamina`, `${base}/me/stamina`];
 
-      // Parse defensively (Pages misconfig can return HTML)
-      const text = await res.text();
-      if (!text) throw new Error("empty response");
-      let j;
-      try {
-        j = JSON.parse(text);
-      } catch {
-        throw new Error("invalid JSON");
+      let j = null;
+      let lastErr = null;
+
+      for (const url of candidates) {
+        try {
+          const res = await fetch(url, {
+            headers: { "X-Wallet-Address": address },
+            cache: "no-store",
+          });
+          const text = await res.text();
+          if (!text) throw new Error("empty response");
+          j = JSON.parse(text);
+          // minimaal verwacht veld
+          if (typeof j === "object" && ("stamina" in j || "cap" in j)) {
+            break; // gelukt
+          } else {
+            throw new Error("json missing fields");
+          }
+        } catch (e) {
+          lastErr = e;
+          j = null;
+        }
       }
+
+      if (!j) throw lastErr || new Error("no valid stamina endpoint");
 
       // expected: { wallet, user_id, rank, stamina, cap, updated_at, last_tick_at }
       setRankName(j.rank ?? null);
@@ -199,7 +212,7 @@ export function EmpireProvider({ children }) {
       setStaminaCap(Number(j.cap ?? 0));
       setLastTickAt(j.last_tick_at ?? j.updated_at ?? null);
 
-      // keep shadow stamina for legacy reads
+      // shadow stamina voor legacy onderdelen
       setState((prev) => ({
         ...prev,
         stamina: Number(j.stamina ?? 0),
@@ -207,9 +220,12 @@ export function EmpireProvider({ children }) {
       }));
     } catch (e) {
       console.warn("[Crooks] failed to sync user:", e);
-      // keep old values; UI will show "— / —" if nulls
+      // waarden blijven zoals ze waren; UI toont "— / —" bij nulls
+      setStaminaVal(null);
+      setStaminaCap(null);
     }
   }, [address]);
+
 
   // initial + on wallet change
   useEffect(() => {
