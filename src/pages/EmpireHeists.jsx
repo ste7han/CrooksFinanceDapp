@@ -40,6 +40,7 @@ const ERC20_ABI = [
 // === Backend ===
 const BACKEND_BASE = (
   import.meta.env.VITE_PAGES_API ||
+  import.meta.env.VITE_API_BASE ||     // <— ook deze accepteren
   import.meta.env.VITE_BACKEND_URL ||
   ""
 ).replace(/\/$/, "");
@@ -51,8 +52,9 @@ async function fetchJsonWithFallback(paths, { method = "GET", body, wallet } = {
   let lastErr;
   for (const path of paths) {
     try {
-      if (!BACKEND_BASE && !path.startsWith("/")) throw new Error("Backend URL not configured");
-      const url = `${BACKEND_BASE}${path}`;
+      const url = path.startsWith("http")
+        ? path
+        : `${BACKEND_BASE || ""}${path}`;
       const r = await fetch(url, {
         method,
         headers,
@@ -63,20 +65,20 @@ async function fetchJsonWithFallback(paths, { method = "GET", body, wallet } = {
       const j = txt ? JSON.parse(txt) : {};
       if (!r.ok) throw new Error(j?.error || `Request failed: ${r.status}`);
       return j;
-    } catch (e) {
-      lastErr = e;
-    }
+    } catch (e) { lastErr = e; }
   }
   throw lastErr || new Error("All backend paths failed");
 }
 
+// Probeer met en zonder /api, én same-origin als BACKEND_BASE fout staat
 async function apiFetch(path, opts = {}) {
-  // probeer /api/... en fallback naar /...
-  const clean = path.replace(/^\/+/, "");
-  return fetchJsonWithFallback([`/api/${clean}`, `/${clean}`], opts);
+  const clean = `/${path}`.replace(/\/{2,}/g, "/").replace(/^\/+/, "");
+  return fetchJsonWithFallback(
+    [`/api/${clean}`, `/${clean}`], // same-origin
+    opts
+  );
 }
 
-// Authoritative stamina spend on the server
 async function apiSpendStamina(amount, wallet) {
   return apiFetch("me/stamina/spend", {
     method: "POST",
@@ -84,6 +86,7 @@ async function apiSpendStamina(amount, wallet) {
     body: { amount: Number(amount || 0) },
   });
 }
+
 
 
 // ===== Rank thresholds (NFT count → rank name) =====

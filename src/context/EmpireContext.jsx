@@ -11,7 +11,11 @@ import { useWallet } from "./WalletContext";
 
 /* ---------------- ENV ---------------- */
 /** Pages Functions base for stamina. Leave empty to use same-origin relative path */
-const PAGES_API = (import.meta.env.VITE_PAGES_API || "").replace(/\/$/, "");
+const PAGES_API = (
+  import.meta.env.VITE_PAGES_API ||
+  import.meta.env.VITE_API_BASE ||   // <— ook deze accepteren
+  ""
+).replace(/\/$/, "");
 
 /* -------- Local storage keys (non-stamina only) -------- */
 const LS_KEY = "crooks:empire:store:v1";
@@ -165,66 +169,65 @@ export function EmpireProvider({ children }) {
     setState((prev) => ({ ...prev, factionPointsMonth: 0 }));
   }, []);
 
-  /* ---------- backend stamina fetch (defensive parse + fallback) ---------- */
-  const refreshStamina = useCallback(async () => {
-    try {
-      if (!address) {
-        setRankName(null);
-        setStaminaVal(null);
-        setStaminaCap(null);
-        setLastTickAt(null);
-        return;
-      }
-
-      // Probeer beide routes: /api/me/stamina en /me/stamina
-      const base = (PAGES_API || "").replace(/\/$/, "");
-      const candidates = [`${base}/api/me/stamina`, `${base}/me/stamina`];
-
-      let j = null;
-      let lastErr = null;
-
-      for (const url of candidates) {
-        try {
-          const res = await fetch(url, {
-            headers: { "X-Wallet-Address": address },
-            cache: "no-store",
-          });
-          const text = await res.text();
-          if (!text) throw new Error("empty response");
-          j = JSON.parse(text);
-          // minimaal verwacht veld
-          if (typeof j === "object" && ("stamina" in j || "cap" in j)) {
-            break; // gelukt
-          } else {
-            throw new Error("json missing fields");
-          }
-        } catch (e) {
-          lastErr = e;
-          j = null;
-        }
-      }
-
-      if (!j) throw lastErr || new Error("no valid stamina endpoint");
-
-      // expected: { wallet, user_id, rank, stamina, cap, updated_at, last_tick_at }
-      setRankName(j.rank ?? null);
-      setStaminaVal(Number(j.stamina ?? 0));
-      setStaminaCap(Number(j.cap ?? 0));
-      setLastTickAt(j.last_tick_at ?? j.updated_at ?? null);
-
-      // shadow stamina voor legacy onderdelen
-      setState((prev) => ({
-        ...prev,
-        stamina: Number(j.stamina ?? 0),
-        wallet: address,
-      }));
-    } catch (e) {
-      console.warn("[Crooks] failed to sync user:", e);
-      // waarden blijven zoals ze waren; UI toont "— / —" bij nulls
+  /* ---------- backend stamina fetch (defensive parse + multi-fallback) ---------- */
+const refreshStamina = useCallback(async () => {
+  try {
+    if (!address) {
+      setRankName(null);
       setStaminaVal(null);
       setStaminaCap(null);
+      setLastTickAt(null);
+      return;
     }
-  }, [address]);
+
+    const base = (PAGES_API || "").replace(/\/$/, "");
+    // probeer: met base + zonder base (same-origin), met en zonder /api
+    const candidates = [
+      base ? `${base}/api/me/stamina` : null,
+      base ? `${base}/me/stamina` : null,
+      `/api/me/stamina`,
+      `/me/stamina`,
+    ].filter(Boolean);
+
+    let data = null, lastErr = null;
+
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, {
+          headers: { "X-Wallet-Address": address },
+          cache: "no-store",
+        });
+        const txt = await res.text();
+        if (!txt) throw new Error("empty response");
+        const j = JSON.parse(txt);
+        if (typeof j === "object" && ("stamina" in j || "cap" in j)) {
+          data = j;
+          break;
+        } else {
+          throw new Error("json missing fields");
+        }
+      } catch (e) { lastErr = e; }
+    }
+
+    if (!data) throw lastErr || new Error("no valid stamina endpoint");
+
+    setRankName(data.rank ?? null);
+    setStaminaVal(Number(data.stamina ?? 0));
+    setStaminaCap(Number(data.cap ?? 0));
+    setLastTickAt(data.last_tick_at ?? data.updated_at ?? null);
+
+    setState((prev) => ({
+      ...prev,
+      stamina: Number(data.stamina ?? 0),
+      wallet: address,
+    }));
+  } catch (e) {
+    console.warn("[Crooks] failed to sync user:", e);
+    setStaminaVal(null);
+    setStaminaCap(null);
+  }
+}, [address]);
+
 
 
   // initial + on wallet change
