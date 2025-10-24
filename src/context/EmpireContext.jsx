@@ -10,11 +10,8 @@ import React, {
 import { useWallet } from "./WalletContext";
 
 /* ---------------- ENV ---------------- */
-// Accept either VITE_API_BASE or VITE_BACKEND_URL; strip trailing slash.
-const API =
-  (import.meta.env.VITE_API_BASE ||
-    import.meta.env.VITE_BACKEND_URL ||
-    "").replace?.(/\/$/, "") || "";
+/** Pages Functions base for stamina. Leave empty to use same-origin relative path */
+const PAGES_API = (import.meta.env.VITE_PAGES_API || "").replace(/\/$/, "");
 
 /* -------- Local storage keys (non-stamina only) -------- */
 const LS_KEY = "crooks:empire:store:v1";
@@ -171,7 +168,7 @@ export function EmpireProvider({ children }) {
   /* ---------- backend stamina fetch (defensive parse) ---------- */
   const refreshStamina = useCallback(async () => {
     try {
-      if (!address || !API) {
+      if (!address) {
         setRankName(null);
         setStaminaVal(null);
         setStaminaCap(null);
@@ -179,12 +176,14 @@ export function EmpireProvider({ children }) {
         return;
       }
 
-      const res = await fetch(`${API}/api/me/stamina`, {
+      // Use same-origin Pages Functions by default
+      const url = `${PAGES_API}/api/me/stamina`;
+      const res = await fetch(url, {
         headers: { "X-Wallet-Address": address },
         cache: "no-store",
       });
 
-      // Some CF routes can return HTML or empty body on misconfig — parse defensively.
+      // Parse defensively (Pages misconfig can return HTML)
       const text = await res.text();
       if (!text) throw new Error("empty response");
       let j;
@@ -208,7 +207,7 @@ export function EmpireProvider({ children }) {
       }));
     } catch (e) {
       console.warn("[Crooks] failed to sync user:", e);
-      // Do not throw — keep UI alive with previous values
+      // keep old values; UI will show "— / —" if nulls
     }
   }, [address]);
 
@@ -245,7 +244,6 @@ export function EmpireProvider({ children }) {
             : valueOrUpdater;
         return { ...prev, stamina: Math.max(0, Number(nextVal) || 0) };
       });
-      // Re-sync from backend after local UX change
       refreshStamina().catch(() => {});
     },
     [refreshStamina]
