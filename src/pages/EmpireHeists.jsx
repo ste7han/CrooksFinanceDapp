@@ -150,6 +150,13 @@ export default function EmpireHeists() {
   // hydrate identity for persistence later
   useEffect(() => { if (address) hydrateFromWallet(address); }, [address, hydrateFromWallet]);
 
+  // ✅ pull stamina/cap/ETA from backend and keep it in sync
+  useEffect(() => {
+    refreshStamina().catch(() => {});
+    const id = setInterval(() => refreshStamina().catch(() => {}), 60_000);
+    return () => clearInterval(id);
+  }, [refreshStamina]);
+
   const [readProvider, setReadProvider] = useState(null);
   useEffect(() => {
     if (provider) setReadProvider(provider);
@@ -349,10 +356,11 @@ export default function EmpireHeists() {
                 ? "— / —"
                 : `${formatInt(stamina)} / ${formatInt(staminaCap)}`
             }
+            // % towards the next +1 (fills over the hour)
             progressPct={
-              staminaCap > 0 && stamina != null
-                ? Math.max(0, Math.min(1, (stamina || 0) / staminaCap))
-                : 0
+              staminaCap > 0 && stamina != null && stamina < staminaCap
+                ? Math.max(0, Math.min(1, 1 - (Number(nextTickMs || 0) / 3_600_000)))
+                : 1
             }
             subRight={nextLabel}
           />
