@@ -178,15 +178,18 @@ export default function EmpireProfile() {
     state: empire,
     setFaction,
     clearFaction,
-    awardTokens,     // not used on this page yet, but handy for testing / future hooks
-    recordHeist,     // "
-    setStamina,      // "
+    awardTokens,
+    recordHeist,
+    setStamina,
     hydrateFromWallet,
-    resetWeek,       // "
-    resetMonth,      // "
-    initStaminaIfNeeded,
-    tickStamina,
+    resetWeek,
+    resetMonth,
+    stamina,
+    staminaCap,
+    nextTickMs,
+    refreshStamina,
   } = useEmpire();
+
 
   // Hydrate store with connected wallet + ensure backend user exists
   useEffect(() => {
