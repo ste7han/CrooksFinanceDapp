@@ -38,18 +38,39 @@ const ERC20_ABI = [
 ];
 
 // === Backend ===
-const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "https://crooks-backend.steph-danser.workers.dev").replace(/\/$/, "");
+// Prefer local Pages function (wrangler dev) if present, else the Worker URL.
+const BACKEND_URL = (
+  import.meta.env.VITE_PAGES_API ||
+  import.meta.env.VITE_BACKEND_URL ||
+  ""
+).replace(/\/$/, "");
+
 async function apiFetch(path, { method = "GET", body, wallet } = {}) {
+  if (!BACKEND_URL) throw new Error("Backend URL not configured");
   const headers = { "Content-Type": "application/json" };
-  if (wallet) headers.Authorization = `Bearer ${wallet}`;
+  // Use same header style as /api/me/stamina
+  if (wallet) headers["X-Wallet-Address"] = wallet;
   const r = await fetch(`${BACKEND_URL}${path}`, {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
   });
-  const j = await r.json().catch(() => ({}));
+  const txt = await r.text();
+  let j = {};
+  if (txt) {
+    try { j = JSON.parse(txt); } catch { /* leave as {} */ }
+  }
   if (!r.ok) throw new Error(j?.error || `Request failed: ${r.status}`);
   return j;
+}
+
+// Authoritative stamina spend on the server
+async function apiSpendStamina(amount, wallet) {
+  return apiFetch("/api/me/stamina/spend", {
+    method: "POST",
+    wallet,
+    body: { amount: Number(amount || 0) },
+  });
 }
 
 // ===== Rank thresholds (NFT count → rank name) =====
@@ -135,13 +156,11 @@ export default function EmpireHeists() {
 
   const {
     state: empire,              // legacy local stats (played/wins/losses, etc.)
-    // backend-authoritative stamina
     stamina,
     staminaCap,
     nextTickMs,
     refreshStamina,
-    // keep using these
-    setStamina,                 // local shadow; we still decrement instantly for UX
+    setStamina,                 // legacy shadow for instant UX (we still re-sync)
     awardTokens,
     recordHeist,
     hydrateFromWallet,
@@ -150,7 +169,7 @@ export default function EmpireHeists() {
   // hydrate identity for persistence later
   useEffect(() => { if (address) hydrateFromWallet(address); }, [address, hydrateFromWallet]);
 
-  // ✅ pull stamina/cap/ETA from backend and keep it in sync
+  // keep stamina in sync
   useEffect(() => {
     refreshStamina().catch(() => {});
     const id = setInterval(() => refreshStamina().catch(() => {}), 60_000);
@@ -255,7 +274,10 @@ export default function EmpireHeists() {
     setPlayingKey(key);
 
     try {
-      const temp = { ...player };
+      // Make sure we're up-to-date to avoid overspend races
+      await refreshStamina().catch(() => {});
+
+      const temp = { ...player, stamina: Number(stamina ?? 0) };
       const res = runHeist(heistsData, key, temp);
 
       if (res.type === "blocked") {
@@ -263,9 +285,21 @@ export default function EmpireHeists() {
         return;
       }
 
-      // instant UX: decrement local shadow; backend remains the source of truth
+      // 1) Spend stamina on the server (authoritative)
+      try {
+        await apiSpendStamina(res.staminaCost, address);
+      } catch (e) {
+        setResult({
+          blocked: true,
+          message: e?.message || "Could not spend stamina. Please try again.",
+        });
+        return;
+      }
+
+      // Optional instant local feedback (kept, but we'll re-sync right after)
       setStamina((s) => Math.max(0, Number(s || 0) - (res.staminaCost || 0)));
 
+      // 2) Resolve result
       if (!res.success) {
         recordHeist?.("loss");
         setResult({
@@ -279,7 +313,7 @@ export default function EmpireHeists() {
 
       awardTokens?.(res.rewards, { addFactionPoints: res.pointsChange });
 
-      // Persist rewards server-side
+      // Persist rewards server-side (best-effort)
       try {
         await apiFetch("/api/rewardBatch", {
           method: "POST",
@@ -306,8 +340,8 @@ export default function EmpireHeists() {
         staminaCost: res.staminaCost,
       });
     } finally {
-      // always re-sync with backend at the end
-      await refreshStamina();
+      // Always re-sync with backend at the end so UI shows the new value
+      await refreshStamina().catch(() => {});
       setPlayingKey(null);
     }
   }
@@ -375,7 +409,7 @@ export default function EmpireHeists() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {heistEntries.map(([key, h]) => {
               const imgSrc = HEIST_IMG(key);
-              const canAfford = (stamina ?? 0) >= h.stamina_cost;
+              const canAfford = typeof stamina === "number" && stamina >= h.stamina_cost;
               const okRole = rankAtLeast(currentRank.name, h.min_role);
               const warnStrength = totalStrength < h.recommended_strength;
 
