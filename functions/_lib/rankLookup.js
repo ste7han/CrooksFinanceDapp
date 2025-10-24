@@ -12,3 +12,10 @@ export async function getRankNameForUser(sb, userId) {
   // Fallback
   return "Prospect";
 }
+
+export async function getRankAndCapForUser(sb, userId) {
+  const q = await sb.from("v_user_rank_cap").select("rank_name,stamina_cap").eq("user_id", userId).single();
+  if (q.error) return { rankName: "Prospect", cap: 0 };
+  return { rankName: q.data.rank_name, cap: Number(q.data.stamina_cap || 0) };
+}
+
