@@ -32,20 +32,6 @@ function getWalletLowerFromAny(request, url) {
 }
 
 // ---- Wallet helpers ----
-function getWalletLowerFromAny(request, url) {
-  // Header first
-  let w = request.headers.get("X-Wallet-Address");
-  // Bearer fallback
-  if (!w) {
-    const auth = request.headers.get("Authorization") || "";
-    const m = auth.match(/^Bearer\s+(0x[a-fA-F0-9]{40})$/);
-    if (m) w = m[1];
-  }
-  // Query fallback: /api/me/stamina?wallet=0x...
-  if (!w) w = url.searchParams.get("wallet") || "";
-  if (!/^0x[a-fA-F0-9]{40}$/.test(w)) return null;
-  return w.toLowerCase();
-}
 
 function isAdmin(request, env) {
   const admin = (env.ADMIN_WALLET || "").toLowerCase();
