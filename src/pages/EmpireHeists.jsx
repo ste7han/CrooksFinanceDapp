@@ -1,3 +1,4 @@
+// src/pages/EmpireHeists.jsx
 import { useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
 import { Link } from "react-router-dom";
@@ -6,16 +7,7 @@ import { runHeist } from "../game/heistEngine.js";
 import { useWallet } from "../context/WalletContext";
 import { useEmpire } from "../context/EmpireContext";
 
-/**
- * Crooks Empire — Heists
- * - 10 heists tiles with image, info, and play
- * - Summary strip: stamina, strength, weapons, multiplier, rank
- * - Uses heists.json (v3.0) to drive rules + rewards
- * - Strength-based success chance; failure loses points only
- * - Rewards credited to game wallet via EmpireContext.awardTokens
- */
-
-// ===== Styling helpers (matching your existing look) =====
+// ===== Styling helpers =====
 const GLASS = "bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl";
 const SOFT = "shadow-[0_10px_40px_-10px_rgba(0,0,0,0.5)]";
 const BTN = "rounded-2xl px-4 py-2 transition disabled:opacity-50 disabled:cursor-not-allowed";
@@ -49,7 +41,6 @@ const ERC20_ABI = [
 const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "https://crooks-backend.steph-danser.workers.dev").replace(/\/$/, "");
 async function apiFetch(path, { method = "GET", body, wallet } = {}) {
   const headers = { "Content-Type": "application/json" };
-  // we send the wallet so the worker can auth the request
   if (wallet) headers.Authorization = `Bearer ${wallet}`;
   const r = await fetch(`${BACKEND_URL}${path}`, {
     method,
@@ -61,8 +52,7 @@ async function apiFetch(path, { method = "GET", body, wallet } = {}) {
   return j;
 }
 
-
-// ===== Rank thresholds (your latest ladder) =====
+// ===== Rank thresholds (NFT count → rank name) =====
 const RANKS = [
   { id: 1,  name: "Prospect",       min: 0   },
   { id: 2,  name: "Member",         min: 1   },
@@ -87,7 +77,6 @@ function computeRank(crklCount) {
   const next = RANKS.find(r => r.min > current.min) || null;
   return { current, next };
 }
-
 function rankAtLeast(currentName, needName) {
   const norm = (s) => String(s || "").trim().toLowerCase();
   const curId  = RANKS.find(r => norm(r.name) === norm(currentName))?.id ?? -1;
@@ -95,11 +84,11 @@ function rankAtLeast(currentName, needName) {
   return curId >= needId;
 }
 
-// ===== Heist images (fallback if missing) =====
+// ===== Heist images =====
 const HEIST_IMG = (k) => `/pictures/heists/${k}.png`;
-const FALLBACK_IMG = "/pictures/heists/_placeholder.png"; // add a simple placeholder if you want
+const FALLBACK_IMG = "/pictures/heists/_placeholder.png";
 
-// ===== Small helpers reused from Profile =====
+// ===== Small helpers =====
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function resolveMediaUrl(u) {
   if (!u) return null;
@@ -129,23 +118,36 @@ function parseStrength(meta) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
-
-
-// ===== Utils =====
 const round = (n, d=2) => Math.round(n * 10**d) / 10**d;
 const randBetween = ([a,b]) => Math.random() * (b - a) + a;
 const randInt = (a,b) => Math.floor(Math.random() * (b - a + 1)) + a;
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 function formatInt(n) { const x = Number(n || 0); return Number.isFinite(x) ? x.toLocaleString() : "0"; }
+const fmtETA = (ms) => {
+  const s = Math.ceil(ms / 1000);
+  const m = Math.floor(s / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return `${m}:${ss}`;
+};
 
-// ===== Component =====
 export default function EmpireHeists() {
   const { provider, address, networkOk } = useWallet();
-  const { state: empire, setStamina, awardTokens, recordHeist, hydrateFromWallet,
-          initStaminaIfNeeded, tickStamina, getStaminaProgress } = useEmpire();
 
+  const {
+    state: empire,              // legacy local stats (played/wins/losses, etc.)
+    // backend-authoritative stamina
+    stamina,
+    staminaCap,
+    nextTickMs,
+    refreshStamina,
+    // keep using these
+    setStamina,                 // local shadow; we still decrement instantly for UX
+    awardTokens,
+    recordHeist,
+    hydrateFromWallet,
+  } = useEmpire();
 
-  // hydrate identity → useful for persistence later
+  // hydrate identity for persistence later
   useEffect(() => { if (address) hydrateFromWallet(address); }, [address, hydrateFromWallet]);
 
   const [readProvider, setReadProvider] = useState(null);
@@ -164,196 +166,146 @@ export default function EmpireHeists() {
   const crkl = useMemo(() => (readProvider ? new ethers.Contract(CRKL_NFT_ADDRESS, ERC721_ABI, readProvider) : null), [readProvider]);
   const weapons = useMemo(() => (readProvider ? new ethers.Contract(WEAPON_NFT_ADDRESS, ERC721_ABI, readProvider) : null), [readProvider]);
 
-  useEffect(() => {
-    (async () => {
-      if (!crkl || !address) return;
-      try {
-        const bal = await crkl.balanceOf(address).catch(() => 0n);
-        setCrklCount(Number(bal || 0n));
-      } catch {}
-    })();
-  }, [crkl, address]);
+  useEffect(() => { (async () => {
+    if (!crkl || !address) return;
+    try {
+      const bal = await crkl.balanceOf(address).catch(() => 0n);
+      setCrklCount(Number(bal || 0n));
+    } catch {}
+  })(); }, [crkl, address]);
 
-  useEffect(() => {
-    (async () => {
-      if (!readProvider || !address || !CRKS_ADDRESS) return;
-      try {
-        const c = new ethers.Contract(CRKS_ADDRESS, ERC20_ABI, readProvider);
-        const [bal, dec] = await Promise.all([
-          c.balanceOf(address).catch(() => 0n),
-          c.decimals().catch(() => 18),
-        ]);
-        const human = Number(ethers.formatUnits(bal, Number(dec || 18)));
-        setCrksHuman(Number.isFinite(human) ? human : 0);
-      } catch {}
-    })();
-  }, [readProvider, address]);
+  useEffect(() => { (async () => {
+    if (!readProvider || !address || !CRKS_ADDRESS) return;
+    try {
+      const c = new ethers.Contract(CRKS_ADDRESS, ERC20_ABI, readProvider);
+      const [bal, dec] = await Promise.all([
+        c.balanceOf(address).catch(() => 0n),
+        c.decimals().catch(() => 18),
+      ]);
+      const human = Number(ethers.formatUnits(bal, Number(dec || 18)));
+      setCrksHuman(Number.isFinite(human) ? human : 0);
+    } catch {}
+  })(); }, [readProvider, address]);
 
-  useEffect(() => {
-    (async () => {
-      if (!weapons || !address) return;
-      try {
-        const ENUM_ID = "0x780e9d63";
-        const enumerable = await weapons.supportsInterface(ENUM_ID).catch(() => false);
-        if (!enumerable) { setWeaponsCount(0); setTotalStrength(0); return; }
+  useEffect(() => { (async () => {
+    if (!weapons || !address) return;
+    try {
+      const ENUM_ID = "0x780e9d63";
+      const enumerable = await weapons.supportsInterface(ENUM_ID).catch(() => false);
+      if (!enumerable) { setWeaponsCount(0); setTotalStrength(0); return; }
 
-        const bal = await weapons.balanceOf(address);
-        const n = Number(bal || 0n);
-        setWeaponsCount(n);
+      const bal = await weapons.balanceOf(address);
+      const n = Number(bal || 0n);
+      setWeaponsCount(n);
 
-        let sum = 0;
-        for (let i = 0; i < n; i++) {
-          const id = await weapons.tokenOfOwnerByIndex(address, i);
-          let meta = null;
-          try {
-            const uri = await weapons.tokenURI(id);
-            const url = resolveMediaUrl(uri);
-            if (url) meta = await fetchJson(url);
-          } catch {}
-          if (!meta) meta = await fetchJson(`/metadata_weapons/${Number(id)}.json`);
-          sum += parseStrength(meta);
-          await sleep(40);
-        }
-        setTotalStrength(sum);
-      } catch {
-        setWeaponsCount(0);
-        setTotalStrength(0);
+      let sum = 0;
+      for (let i = 0; i < n; i++) {
+        const id = await weapons.tokenOfOwnerByIndex(address, i);
+        let meta = null;
+        try {
+          const uri = await weapons.tokenURI(id);
+          const url = resolveMediaUrl(uri);
+          if (url) meta = await fetchJson(url);
+        } catch {}
+        if (!meta) meta = await fetchJson(`/metadata_weapons/${Number(id)}.json`);
+        sum += parseStrength(meta);
+        await sleep(40);
       }
-    })();
-  }, [weapons, address]);
+      setTotalStrength(sum);
+    } catch {
+      setWeaponsCount(0);
+      setTotalStrength(0);
+    }
+  })(); }, [weapons, address]);
 
-  // Derived stats
+  // Derived stats from on-chain & context
   const { current: currentRank } = computeRank(crklCount);
-  // Multiplier rule (same as Profile): bonusPct = CRKS / 10_000; factor = 1 + bonusPct/100
   const bonusPct = crksHuman / 10_000;
   const multiplier = 1 + (bonusPct / 100);
 
-  // Ensure stamina is initialized to rank cap on first visit/when rank changes
-useEffect(() => {
-    if (!currentRank?.name) return;
-    initStaminaIfNeeded(currentRank.name);
-    tickStamina(currentRank.name);
-    const id = setInterval(() => tickStamina(currentRank.name), 60_000);
-    return () => clearInterval(id);
-    }, [currentRank?.name, initStaminaIfNeeded, tickStamina]);
-
+  // Next +1 label (from backend timing)
+  const nextLabel = useMemo(() => {
+    if (staminaCap === 0 || stamina == null || staminaCap == null) return "Full";
+    if (stamina >= staminaCap) return "Full";
+    return nextTickMs > 0 ? `Next +1 in ${fmtETA(nextTickMs)}` : "—";
+  }, [stamina, staminaCap, nextTickMs]);
 
   // UI state
-  const [infoKey, setInfoKey] = useState(null);     // which heist is being previewed
-  const [result, setResult] = useState(null);       // last play result
+  const [infoKey, setInfoKey] = useState(null);
+  const [result, setResult] = useState(null);
   const [playingKey, setPlayingKey] = useState(null);
 
-  // Live stamina progress (updates every second)
-  const [stamUI, setStamUI] = useState({ pctToNext: 1, msToNext: 0, isFull: true });
-  useEffect(() => {
-    if (!currentRank?.name) return;
-    const update = () => setStamUI(getStaminaProgress(currentRank.name));
-    update();
-    const id = setInterval(update, 1000);
-    return () => clearInterval(id);
-  }, [currentRank?.name, getStaminaProgress]);
-
-  // --- NEW: auto-regenerate when full hour passes ---
-useEffect(() => {
-  if (!currentRank?.name) return;
-  if (stamUI.isFull) return; // no regen if full
-
-  // When progress bar completes a full cycle (~pctToNext ≈ 1), tickStamina should fire once
-  if (stamUI.pctToNext >= 0.999) {
-    tickStamina(currentRank.name);
-  }
-}, [stamUI.pctToNext, stamUI.isFull, currentRank?.name, tickStamina]);
-
-useEffect(() => {
-  const gained = empire?.stamina; // watch stamina count change
-  if (!gained) return;
-  // e.g. small flash animation or sound later
-}, [empire?.stamina]);
-
-
-  // Format mm:ss
-  const fmtETA = (ms) => {
-    const s = Math.ceil(ms / 1000);
-    const m = Math.floor(s / 60);
-    const ss = String(s % 60).padStart(2, "0");
-    return `${m}:${ss}`;
-  };
-
-  // Player shape for engine
+  // Player snapshot for engine
   const player = {
-    stamina: Number(empire?.stamina ?? 0),
+    stamina: Number(stamina ?? 0),
     strength: totalStrength,
     multiplier,
     rankName: currentRank?.name || "Prospect",
-
   };
 
-async function onPlay(key) {
-  // voorkom dubbel klikken / meerdere gelijktijdige runs
-  if (playingKey) return;
-  setPlayingKey(key);
+  async function onPlay(key) {
+    if (playingKey) return;
+    setPlayingKey(key);
 
-  try {
-    // LET OP: runHeist is sync, maar we houden de functie async voor toekomstige async logic
-    const temp = { ...player };
-    const res = runHeist(heistsData, key, temp);
+    try {
+      const temp = { ...player };
+      const res = runHeist(heistsData, key, temp);
 
-    if (res.type === "blocked") {
-      setResult({ blocked: true, message: res.reason });
-      return;
-    }
+      if (res.type === "blocked") {
+        setResult({ blocked: true, message: res.reason });
+        return;
+      }
 
-    // stamina updaten
-    setStamina((s) => Math.max(0, Number(s || 0) - (res.staminaCost || 0)));
+      // instant UX: decrement local shadow; backend remains the source of truth
+      setStamina((s) => Math.max(0, Number(s || 0) - (res.staminaCost || 0)));
 
-    if (!res.success) {
-      // verlies-case
-      recordHeist?.("loss");
+      if (!res.success) {
+        recordHeist?.("loss");
+        setResult({
+          success: false,
+          message: res.message,
+          points: res.pointsChange,
+          staminaCost: res.staminaCost,
+        });
+        return;
+      }
+
+      awardTokens?.(res.rewards, { addFactionPoints: res.pointsChange });
+
+      // Persist rewards server-side
+      try {
+        await apiFetch("/api/rewardBatch", {
+          method: "POST",
+          wallet: address,
+          body: {
+            wallet: address,
+            rewards: res.rewards,
+            reason: "heist_reward",
+            ref: `heist:${key}`,
+          },
+        });
+      } catch (e) {
+        console.warn("[backend] rewardBatch failed:", e?.message);
+      }
+
+      recordHeist?.("win");
       setResult({
-        success: false,
+        success: true,
         message: res.message,
+        rewards: res.rewards,
         points: res.pointsChange,
+        lucky: res.lucky,
+        luckyMultiplier: res.luckyMultiplier,
         staminaCost: res.staminaCost,
       });
-      return;
+    } finally {
+      // always re-sync with backend at the end
+      await refreshStamina();
+      setPlayingKey(null);
     }
-
-    // succes-case
-    awardTokens?.(res.rewards, { addFactionPoints: res.pointsChange });
-    // NEW: persist to backend
-    try {
-      await apiFetch("/api/rewardBatch", {
-        method: "POST",
-        wallet: address, // from useWallet()
-        body: {
-          wallet: address,
-          rewards: res.rewards,          // e.g. { CRKS: 123, MOON: 456 }
-          reason: "heist_reward",
-          ref: `heist:${key}`,           // useful reference
-        },
-      });
-    } catch (e) {
-      console.warn("[backend] rewardBatch failed:", e?.message);
-      // UX idea: optionally show a toast: "Saved locally, backend sync failed"
-    }
-    recordHeist?.("win");
-    setResult({
-      success: true,
-      message: res.message,
-      rewards: res.rewards,
-      points: res.pointsChange,
-      lucky: res.lucky,
-      luckyMultiplier: res.luckyMultiplier,
-      staminaCost: res.staminaCost,
-    });
-  } finally {
-    // altijd terugzetten, ook bij errors
-    setPlayingKey(null);
   }
-}
 
-
-  // Prepare heists list (ensure 10, ordered by stamina_cost then title)
+  // Prepare heists list
   const heistEntries = useMemo(() => {
     const arr = Object.entries(heistsData.heists || {});
     arr.sort((a,b) => (a[1].stamina_cost - b[1].stamina_cost) || a[1].title.localeCompare(b[1].title));
@@ -390,7 +342,20 @@ async function onPlay(key) {
 
         {/* Summary strip */}
         <section className="mt-5 grid grid-cols-1 md:grid-cols-5 gap-3">
-          <SummaryTile label="Stamina" value={`${formatInt(empire?.stamina ?? 0)} / ${staminaMaxFor(currentRank.name)}`} progressPct={stamUI.pctToNext} subRight={stamUI.isFull ? "Full" : `Next +1 in ${fmtETA(stamUI.msToNext)}`} />
+          <SummaryTile
+            label="Stamina"
+            value={
+              stamina == null || staminaCap == null
+                ? "— / —"
+                : `${formatInt(stamina)} / ${formatInt(staminaCap)}`
+            }
+            progressPct={
+              staminaCap > 0 && stamina != null
+                ? Math.max(0, Math.min(1, (stamina || 0) / staminaCap))
+                : 0
+            }
+            subRight={nextLabel}
+          />
           <SummaryTile label="Strength" value={formatInt(totalStrength)} />
           <SummaryTile label="Weapons" value={formatInt(weaponsCount)} />
           <SummaryTile label="Multiplier" value={`${multiplier.toFixed(2)}×`} hint={`+${bonusPct.toFixed(2)}% from CRKS`} />
@@ -402,7 +367,7 @@ async function onPlay(key) {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {heistEntries.map(([key, h]) => {
               const imgSrc = HEIST_IMG(key);
-              const canAfford = (empire?.stamina ?? 0) >= h.stamina_cost;
+              const canAfford = (stamina ?? 0) >= h.stamina_cost;
               const okRole = rankAtLeast(currentRank.name, h.min_role);
               const warnStrength = totalStrength < h.recommended_strength;
 
@@ -439,7 +404,7 @@ async function onPlay(key) {
                         onClick={() => onPlay(key)}
                         disabled={!canAfford || !okRole || playingKey === key}
                         title={
-                            !okRole
+                          !okRole
                             ? `Requires ${h.min_role}+`
                             : !canAfford
                             ? "Not enough stamina"
@@ -447,9 +412,9 @@ async function onPlay(key) {
                             ? "Playing..."
                             : "Play"
                         }
-                        >
+                      >
                         {playingKey === key ? "Playing..." : "Play"}
-                        </button>
+                      </button>
                     </div>
                   </div>
 
@@ -494,7 +459,7 @@ async function onPlay(key) {
               <div className="text-sm"><b>Points:</b> +{formatInt(result.points)}</div>
               {result && result.staminaCost != null && (
                 <div className="text-xs opacity-80">Stamina: -{formatInt(result.staminaCost)} ⚡</div>
-                )}
+              )}
             </div>
           ) : (
             <div className="space-y-2">
@@ -502,7 +467,7 @@ async function onPlay(key) {
               <div className="text-sm"><b>Points:</b> {formatInt(result.points)}</div>
               {result && result.staminaCost != null && (
                 <div className="text-xs opacity-80">Stamina: -{formatInt(result.staminaCost)} ⚡</div>
-                )}
+              )}
             </div>
           )}
         </Modal>
@@ -542,7 +507,6 @@ function SummaryTile({ label, value, hint, progressPct, subRight }) {
   );
 }
 
-
 function HeistInfo({ k, h }) {
   const usd = `${formatInt(h.amount_usd_range[0] * 100)}¢ – ${formatInt(h.amount_usd_range[1] * 100)}¢ (per token drop, pre-multiplier)`;
   return (
@@ -578,15 +542,4 @@ function Modal({ title, children, onClose }) {
       </div>
     </div>
   );
-}
-
-/* ---- stamina helper based on your ranks table in JSON ---- */
-function staminaMaxFor(rankName) {
-  // mirror the JSON table (quick map to avoid importing twice)
-  const table = {
-    "Prospect": 0, "Member": 2, "Hustler": 4, "Street Soldier": 6, "Enforcer": 8,
-    "Officer": 10, "Captain": 12, "General": 14, "Gang Leader": 16, "Boss": 18,
-    "Kingpin": 18, "Overlord": 19, "Icon": 19, "Legend": 20, "Immortal": 20
-  };
-  return table[rankName] ?? 0;
 }

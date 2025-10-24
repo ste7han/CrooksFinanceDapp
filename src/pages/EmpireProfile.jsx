@@ -417,7 +417,8 @@ export default function EmpireProfile() {
             >
               Bank
             </Link>
-            <button className={BTN_GHOST} onClick={() => window.location.reload()}>
+            <button className={BTN_GHOST} onClick={() => { refreshStamina().catch(()=>{}); }}
+             >
               Refresh
             </button>
           </div>
@@ -605,17 +606,19 @@ export default function EmpireProfile() {
               <StatTile label="Losses" value={formatInt(stats.heists.losses)} />
             </div>
             <div className="mt-4">
-              {/* Current Stamina */}
+              {/* Current Stamina (backend-authoritative) */}
               <div className="mt-4">
-                <div className="text-sm opacity-70 mb-1">Current Stamina</div>
+                <div className="flex items-center justify-between text-sm opacity-70 mb-1">
+                  <span>Current Stamina</span>
+                  <span>
+                    {(Number(staminaCap) === 0 || Number(stamina) >= Number(staminaCap))
+                      ? "Full"
+                      : `Next +1 in ${fmtETA(nextTickMs || 0)}`}
+                  </span>
+                </div>
                 {(() => {
-                  const capByRank = {
-                    "Prospect": 0, "Member": 2, "Hustler": 4, "Street Soldier": 6, "Enforcer": 8,
-                    "Officer": 10, "Captain": 12, "General": 14, "Gang Leader": 16, "Boss": 18,
-                    "Kingpin": 18, "Overlord": 19, "Icon": 19, "Legend": 20, "Immortal": 20
-                  };
-                  const cap = capByRank[current?.name] ?? 0;
-                  const cur = Number(stats.stamina || 0);
+                  const cap = Number(staminaCap ?? 0);
+                  const cur = Number(stamina ?? 0);
                   const pct = cap > 0 ? Math.min(100, Math.round((cur / cap) * 100)) : 0;
                   return (
                     <>
@@ -713,4 +716,10 @@ function formatInt(n) {
   const x = Number(n || 0);
   if (!Number.isFinite(x)) return "0";
   return x.toLocaleString();
+}
+function fmtETA(ms) {
+  const sec = Math.max(0, Math.ceil((Number(ms) || 0) / 1000));
+  const m = Math.floor(sec / 60);
+  const s = String(sec % 60).padStart(2, "0");
+  return `${m}:${s}`;
 }
