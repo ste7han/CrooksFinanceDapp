@@ -22,7 +22,10 @@ const WEAPON_NFT_ADDRESS = (import.meta.env.VITE_WEAPON_NFT_ADDRESS ||
   "0xB09b903403775Ac0e294B845bF157Bd6A5e8e329").trim();
 
 const CRKS_ADDRESS = (import.meta.env.VITE_CRKS_CA || "").trim(); // set in .env to enable multiplier
-const API_BASE = import.meta.env.VITE_BACKEND_URL || "https://crooks-backend.steph-danser.workers.dev";
+const API_BASE =
+  (import.meta.env.VITE_PAGES_API ||
+   import.meta.env.VITE_API_BASE ||
+   "").replace(/\/$/, "");
 
 const ERC721_ABI = [
   "function balanceOf(address) view returns (uint256)",

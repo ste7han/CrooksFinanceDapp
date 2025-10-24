@@ -331,7 +331,7 @@ export default function EmpireHeists() {
 
       // Persist rewards server-side (best-effort)
       try {
-        await apiFetch("/api/rewardBatch", {
+        await apiFetch("rewardBatch", {
           method: "POST",
           wallet: address,
           body: {
