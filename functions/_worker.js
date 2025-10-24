@@ -16,6 +16,21 @@ function json(body, status = 200, extra = {}) {
   });
 }
 
+function getWalletLowerFromAny(request, url) {
+  // Header first
+  let w = request.headers.get("X-Wallet-Address");
+  // Bearer fallback
+  if (!w) {
+    const auth = request.headers.get("Authorization") || "";
+    const m = auth.match(/^Bearer\s+(0x[a-fA-F0-9]{40})$/);
+    if (m) w = m[1];
+  }
+  // Query fallback so you can test in the browser:
+  if (!w) w = url.searchParams.get("wallet") || "";
+  if (!/^0x[a-fA-F0-9]{40}$/.test(w)) return null;
+  return w.toLowerCase();
+}
+
 // ---- Wallet helpers ----
 function getWalletLowerFromAny(request, url) {
   // Header first
