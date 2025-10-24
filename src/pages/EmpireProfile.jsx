@@ -201,12 +201,12 @@ export default function EmpireProfile() {
     // 2) ensure backend user exists
     (async () => {
       try {
-        await fetch(`${API_BASE}/api/me`, {
+        const res = await fetch(`${API_BASE}/api/me`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ wallet: address }),
         });
-        // console.log("[backend] ensured user exists:", address);
+        await res.text(); // ignore body
       } catch (e) {
         console.warn("[backend] user sync failed:", e);
       }
@@ -358,11 +358,12 @@ export default function EmpireProfile() {
 
   useEffect(() => {
     if (!current?.name) return;
-    initStaminaIfNeeded?.(current.name);
-    tickStamina?.(current.name);
-    const id = setInterval(() => tickStamina?.(current.name), 60_000);
+    // Pull stamina+cap from backend and compute nextTickMs internally
+    refreshStamina().catch(() => {});
+    const id = setInterval(() => refreshStamina().catch(() => {}), 60_000);
     return () => clearInterval(id);
-  }, [current?.name, initStaminaIfNeeded, tickStamina]);
+  }, [current?.name, refreshStamina]);
+
 
   // Faction & Stats from store
   const faction = empire.faction;
