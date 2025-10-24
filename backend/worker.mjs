@@ -32,9 +32,14 @@ function getWalletLower(request) {
   return /^0x[a-fA-F0-9]{40}$/.test(w) ? w.toLowerCase() : null;
 }
 
+function isAdmin(request, env) {
+  const admin = (env.ADMIN_WALLET || "").toLowerCase();
+  const who = getWalletLower(request);
+  return admin && who && who === admin;
+}
+
 // --- DB helpers (user_id schema) ---
 async function getOrCreateUserId(supabase, walletLower) {
-  // upsert by wallet_address; return id
   const { data, error } = await supabase
     .from("users")
     .upsert({ wallet_address: walletLower }, { onConflict: "wallet_address" })
@@ -73,7 +78,7 @@ async function addLedgerAndUpsertBalanceByUserId(
     .eq("token_symbol", symbol)
     .single();
 
-  // PGRST116 = "Results contain 0 rows" (not found) → that's fine for first insert
+  // PGRST116 = "Results contain 0 rows" (not found) → first insert is fine
   if (selErr && selErr.code !== "PGRST116") throw new Error(selErr.message);
 
   const newBal = (Number(cur?.balance) || 0) + Number(delta);
@@ -195,7 +200,6 @@ export default {
     }
 
     // --- single reward (server-authoritative) ---
-    // body: { wallet, token, amount, reason?, ref_id? }
     if (path === "/api/reward" && request.method === "POST") {
       const { wallet, token, amount, reason, ref_id } =
         await request.json().catch(() => ({}));
@@ -210,9 +214,8 @@ export default {
       if (!Number.isFinite(delta))
         return json({ error: "Invalid amount" }, 400);
 
-      let userId;
       try {
-        userId = await getOrCreateUserId(supabase, wallet.toLowerCase());
+        const userId = await getOrCreateUserId(supabase, wallet.toLowerCase());
         const balance = await addLedgerAndUpsertBalanceByUserId(
           supabase,
           userId,
@@ -234,7 +237,6 @@ export default {
     }
 
     // --- batch reward (preferred for heists) ---
-    // body: { wallet: "0x...", rewards: { "CRO": 0.12, "MOON": 500, ... }, reason?: string, ref_id?: number }
     if (path === "/api/rewardBatch" && request.method === "POST") {
       const { wallet, rewards, reason, ref_id } = await request
         .json()
@@ -275,6 +277,180 @@ export default {
       }
     }
 
+    // ============================
+    //          ADMIN API
+    // ============================
+    if (path.startsWith("/api/admin/")) {
+      if (!isAdmin(request, env)) return json({ error: "forbidden" }, 403);
+
+      // Reset ALL balances (optionally only for one token)
+      if (path === "/api/admin/resetAllBalances" && request.method === "POST") {
+        const { token } = await request.json().catch(() => ({}));
+        try {
+          if (token) {
+            const sym = String(token).toUpperCase();
+            if (!ALLOWED_TOKENS.has(sym)) return json({ error: "Token not allowed" }, 400);
+            const { error } = await supabase
+              .from("token_balances")
+              .update({ balance: 0 })
+              .eq("token_symbol", sym);
+            if (error) return json({ error: error.message }, 500);
+            return json({ ok: true, reset: sym });
+          } else {
+            const { error } = await supabase
+              .from("token_balances")
+              .update({ balance: 0 });
+            if (error) return json({ error: error.message }, 500);
+            return json({ ok: true });
+          }
+        } catch (e) {
+          return json({ error: e.message || "Reset failed" }, 500);
+        }
+      }
+
+      // Reset balances for a specific wallet (all or one token)
+      if (path === "/api/admin/resetWalletBalances" && request.method === "POST") {
+        const { wallet, token } = await request.json().catch(() => ({}));
+        if (!/^0x[a-fA-F0-9]{40}$/.test(wallet || "")) return json({ error: "Invalid wallet" }, 400);
+
+        try {
+          const lower = wallet.toLowerCase();
+          const userId = await getOrCreateUserId(supabase, lower);
+
+          if (token) {
+            const sym = String(token).toUpperCase();
+            if (!ALLOWED_TOKENS.has(sym)) return json({ error: "Token not allowed" }, 400);
+            const { error } = await supabase
+              .from("token_balances")
+              .upsert({ user_id: userId, token_symbol: sym, balance: 0 }, { onConflict: "user_id,token_symbol" });
+            if (error) return json({ error: error.message }, 500);
+          } else {
+            const { error } = await supabase
+              .from("token_balances")
+              .update({ balance: 0 })
+              .eq("user_id", userId);
+            if (error) return json({ error: error.message }, 500);
+          }
+          return json({ ok: true, wallet: lower });
+        } catch (e) {
+          return json({ error: e.message || "Reset failed" }, 500);
+        }
+      }
+
+      // Add funds (single wallet)
+      if (path === "/api/admin/addFunds" && request.method === "POST") {
+        const { wallet, token, amount } = await request.json().catch(() => ({}));
+        if (!/^0x[a-fA-F0-9]{40}$/.test(wallet || "")) return json({ error: "Invalid wallet" }, 400);
+        const sym = String(token || "").toUpperCase();
+        if (!ALLOWED_TOKENS.has(sym)) return json({ error: "Token not allowed" }, 400);
+        const delta = Number(amount);
+        if (!Number.isFinite(delta)) return json({ error: "Invalid amount" }, 400);
+
+        try {
+          const userId = await getOrCreateUserId(supabase, wallet.toLowerCase());
+          const newBal = await addLedgerAndUpsertBalanceByUserId(
+            supabase,
+            userId,
+            sym,
+            delta,
+            "admin_add",
+            null
+          );
+          return json({ ok: true, wallet: wallet.toLowerCase(), token: sym, balance: newBal });
+        } catch (e) {
+          return json({ error: e.message || "Add funds failed" }, 500);
+        }
+      }
+
+      // Grant stamina to a wallet (adds delta, clamps to cap if cap>0)
+      if (path === "/api/admin/grantStamina" && request.method === "POST") {
+        const { wallet, delta } = await request.json().catch(() => ({}));
+        if (!/^0x[a-fA-F0-9]{40}$/.test(wallet || "")) return json({ error: "Invalid wallet" }, 400);
+
+        try {
+          const lower = wallet.toLowerCase();
+          const userId = await getOrCreateUserId(supabase, lower);
+
+          const { data: cur, error: e1 } = await supabase
+            .from("stamina_states")
+            .select("stamina,cap")
+            .eq("user_id", userId)
+            .single();
+          if (e1 && e1.code !== "PGRST116") return json({ error: e1.message }, 500);
+
+          const add = Number(delta) || 0;
+          const cap = Number(cur?.cap || 0);
+          const curStam = Number(cur?.stamina || 0);
+
+          let next = curStam + add;
+          if (cap > 0) next = Math.min(next, cap);
+          if (next < 0) next = 0;
+
+          const payload = {
+            user_id: userId,
+            stamina: next,
+            cap: cap || (cur ? cap : 0),
+            last_tick_at: new Date().toISOString(),
+          };
+
+          const { error: e2 } = await supabase
+            .from("stamina_states")
+            .upsert(payload, { onConflict: "user_id" });
+
+          if (e2) return json({ error: e2.message }, 500);
+          return json({ ok: true, wallet: lower, stamina: next, cap: payload.cap });
+        } catch (e) {
+          return json({ error: e.message || "Grant stamina failed" }, 500);
+        }
+      }
+
+      // Holdings overview (totals + per wallet)
+      if (path === "/api/admin/holdingsSummary" && request.method === "GET") {
+        try {
+          // Try the view first (if present in your schema.sql)
+          let rows, error;
+
+          ({ data: rows, error } = await supabase
+            .from("v_user_balances")
+            .select("wallet_address,token_symbol,balance,updated_at"));
+
+          // Fallback if the view doesn't exist
+          if (error) {
+            const join = await supabase
+              .from("token_balances")
+              .select("user_id,token_symbol,balance,updated_at");
+            if (join.error) return json({ error: join.error.message }, 500);
+
+            const users = await supabase.from("users").select("id,wallet_address");
+            if (users.error) return json({ error: users.error.message }, 500);
+
+            const map = new Map(users.data.map(u => [u.id, u.wallet_address]));
+            rows = (join.data || []).map(r => ({
+              wallet_address: map.get(r.user_id) || null,
+              token_symbol: r.token_symbol,
+              balance: r.balance,
+              updated_at: r.updated_at,
+            }));
+          }
+
+          const totals = {};
+          for (const r of rows || []) {
+            const sym = String(r.token_symbol).toUpperCase();
+            if (!ALLOWED_TOKENS.has(sym)) continue;
+            totals[sym] = (totals[sym] || 0) + Number(r.balance || 0);
+          }
+
+          return json({ totals, rows: rows || [] });
+        } catch (e) {
+          return json({ error: e.message || "Summary failed" }, 500);
+        }
+      }
+
+      // Unknown admin route
+      return json({ error: "Not found" }, 404);
+    }
+
+    // --- default 404 for non-matched routes ---
     return json({ error: "Not found" }, 404);
   },
 };

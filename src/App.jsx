@@ -7,6 +7,7 @@ import CrooksLegends from "./pages/CrooksLegends";
 import EmpireProfile from "./pages/EmpireProfile";
 import EmpireBank from "./pages/EmpireBank.jsx";
 import EmpireHeists from "./pages/EmpireHeists.jsx";
+import AdminPanel from "./pages/AdminPanel.jsx";  // ⬅️ new
 import { WalletProvider } from "./context/WalletContext";
 
 // tijdelijk debuggen – mag je later verwijderen
@@ -17,16 +18,14 @@ console.log("ENV DEBUG:", {
   FEED: import.meta.env.VITE_EBISUS_FEED_URL,
 });
 
-
-
 export default function App() {
   return (
     <WalletProvider>
-        <BrowserRouter>
+      <BrowserRouter>
         <Navbar />
         {/* ruimte onder de fixed navbar */}
         <div className="pt-16">
-            <Routes>
+          <Routes>
             <Route path="/" element={<CrooksFinance />} />
             <Route path="/legends" element={<CrooksLegends />} />
             <Route path="/empire" element={<CrooksEmpire />} />
@@ -34,13 +33,15 @@ export default function App() {
             <Route path="/empire/profile" element={<EmpireProfile />} />
             <Route path="/empire/bank" element={<EmpireBank />} />
             <Route path="/empire/heists" element={<EmpireHeists />} />
+
+            {/* 🔒 ADMIN PANEL route */}
+            <Route path="/admin" element={<AdminPanel />} />
+
             {/* stubs so tiles don’t 404 */}
-            <Route path="/empire/bank" element={<div />} />
-            <Route path="/empire/heists" element={<div />} />
             <Route path="/empire/casino" element={<div />} />
-                    </Routes>
+          </Routes>
         </div>
-        </BrowserRouter>
+      </BrowserRouter>
     </WalletProvider>
   );
 }
