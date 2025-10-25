@@ -14,8 +14,10 @@ const INPUT = "bg-white/5 border border-white/10 rounded-xl px-3 py-2 w-full out
 
 // ---------- Constants ----------
 const API_BASE =
-  import.meta.env.VITE_BACKEND_URL ||
-  "https://crooks-backend.steph-danser.workers.dev";
+  (import.meta.env.VITE_PAGES_API ||
+   import.meta.env.VITE_API_BASE ||
+   import.meta.env.VITE_BACKEND_URL ||
+   "").replace(/\/$/, "");
 
 const TOKENS = [
   { sym: "CRO",     label: "Cronos",            icon: "/pictures/factions/cro.png",               decimals: 18 },
@@ -28,149 +30,119 @@ const TOKENS = [
   { sym: "CROCARD", label: "Cards of Cronos",   icon: "/pictures/factions/cardsofcronos.png",     decimals: 18 },
 ];
 
-// Local queue (until withdrawals are wired to backend)
-const LS_WITHDRAWALS = "crooks:bank:withdrawals";
-function loadQueuedWithdrawals() {
-  try { return JSON.parse(localStorage.getItem(LS_WITHDRAWALS) || "[]"); } catch { return []; }
-}
-function saveQueuedWithdrawals(list) {
-  try { localStorage.setItem(LS_WITHDRAWALS, JSON.stringify(list)); } catch {}
-}
-
 // ---------- Component ----------
 export default function Bank() {
   const { address, networkOk } = useWallet();
-  const { state: empire } = useEmpire();
+  const { refreshStamina } = useEmpire();
 
-  // Backend state
-  const [backendBalances, setBackendBalances] = useState([]); // array: [{ token_symbol, balance, updated_at }]
-  const [history, setHistory] = useState([]); // optional if your backend returns it
+  // Backend balances map {SYM: number}
+  const [balances, setBalances] = useState(() => Object.fromEntries(TOKENS.map(t => [t.sym, 0])));
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  const [status, setStatus] = useState("");
-
-  // Local withdrawals
-  const [withdrawals, setWithdrawals] = useState(loadQueuedWithdrawals());
 
   // Withdraw modal state
   const [showModal, setShowModal] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ token: "CRKS", amount: "", to: "", note: "" });
 
-  // Default recipient = connected wallet
+  // Analytics
+  const [totals, setTotals] = useState({});   // {SYM: number withdrawn}
+  const [recent, setRecent] = useState([]);   // last 10 rows
+
+  // default recipient = connected wallet
   useEffect(() => {
     setForm(prev => ({ ...prev, to: address || "" }));
   }, [address]);
 
-  // Map backend balances -> dict {SYM: number}
-  const backendMap = useMemo(() => {
-    const map = {};
-    for (const row of backendBalances || []) {
-      const sym = String(row?.token_symbol || "").toUpperCase();
-      const num = Number(row?.balance || 0);
-      if (sym) map[sym] = Number.isFinite(num) ? num : 0;
-    }
-    return map;
-  }, [backendBalances]);
-
-  // Local (legacy) game wallet balances
-  const localMap = useMemo(() => {
-    const src = empire?.tokensEarned || {};
-    const map = {};
-    TOKENS.forEach(t => { map[t.sym] = Number(src[t.sym] ?? 0); });
-    return map;
-  }, [empire]);
-
-  // Prefer backend balances; fall back to local
-  const displayBalances = useMemo(() => {
-    const out = {};
-    TOKENS.forEach(t => {
-      out[t.sym] = backendMap[t.sym] ?? localMap[t.sym] ?? 0;
-    });
-    return out;
-  }, [backendMap, localMap]);
-
-  // Ensure user exists + fetch balances
-  const fetchBackendBalances = async () => {
+  // fetch balances (always show all tokens incl. zeros)
+  const fetchBalances = async () => {
     if (!address) return;
     try {
       setLoading(true);
       setErr("");
 
-      // 1) Upsert user
+      // ensure user
       await fetch(`${API_BASE}/api/me`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ wallet: address }),
-      });
+      }).catch(()=>{});
 
-      // 2) Get balances
       const res = await fetch(`${API_BASE}/api/me/balances`, {
         headers: { "X-Wallet-Address": address },
+        cache: "no-store",
       });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || "Failed to load balances");
-      setBackendBalances(Array.isArray(j?.balances) ? j.balances : []);
-      setHistory(Array.isArray(j?.history) ? j.history : []);
+      const j = await res.json().catch(() => ({}));
+      const map = Object.fromEntries(TOKENS.map(t => [t.sym, 0]));
+      for (const row of (j?.balances || [])) {
+        const sym = String(row?.token_symbol || "").toUpperCase();
+        const num = Number(row?.balance || 0);
+        if (sym in map) map[sym] = Number.isFinite(num) ? num : 0;
+      }
+      setBalances(map);
     } catch (e) {
-      console.error("[bank] balances error", e);
-      setErr(e?.message || "Could not connect to backend");
+      setErr(e?.message || "Failed to load balances");
     } finally {
       setLoading(false);
     }
   };
 
-  // Initial fetch when a wallet connects
-  useEffect(() => {
-    if (address) fetchBackendBalances();
-  }, [address]); // eslint-disable-line
+  const fetchAnalytics = async () => {
+    if (!address) { setTotals({}); setRecent([]); return; }
+    try {
+      const r = await fetch(`${API_BASE}/api/me/withdrawals?wallet=${encodeURIComponent(address)}`, {
+        headers: { "X-Wallet-Address": address },
+        cache: "no-store",
+      });
+      const j = await r.json().catch(()=> ({}));
+      setTotals(j?.totals || {});
+      setRecent(j?.recent || []);
+    } catch {
+      setTotals({}); setRecent([]);
+    }
+  };
 
-  // UI handlers
+  useEffect(() => { if (address) { fetchBalances(); fetchAnalytics(); } }, [address]);
+
   function openWithdraw(sym) {
     setForm({ token: sym, amount: "", to: address || "", note: "" });
     setShowModal(true);
   }
-  function closeModal() {
-    setShowModal(false);
-  }
+  function closeModal() { setShowModal(false); }
 
-  function submitWithdrawal(e) {
+  async function submitWithdrawal(e) {
     e?.preventDefault?.();
     const amt = Number(form.amount);
     if (!form.token) return;
     if (!Number.isFinite(amt) || amt <= 0) return alert("Enter a valid amount.");
-    if (!form.to || form.to.length < 10) return alert("Enter a valid wallet address.");
+    if (!/^0x[a-fA-F0-9]{40}$/.test(form.to || "")) return alert("Enter a valid wallet address (0x...).");
 
-    // Guard UX: block over-withdraw based on what we display to the user
-    const bal = Number(displayBalances[form.token] ?? 0);
+    const bal = Number(balances[form.token] ?? 0);
     if (amt > bal) return alert(`Amount exceeds your ${form.token} balance (${bal}).`);
 
-    const req = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
-      createdAt: Date.now(),
-      wallet: address || "",
-      token: form.token,
-      amount: amt,
-      to: form.to.trim(),
-      note: form.note?.trim() || "",
-      status: "queued", // queued -> processing -> paid/declined
-    };
-
-    // For now, store locally; later: POST to backend
-    const next = [req, ...withdrawals].slice(0, 200);
-    setWithdrawals(next);
-    saveQueuedWithdrawals(next);
-    setShowModal(false);
-  }
-
-  const clearLocalGameCache = () => {
+    setBusy(true);
     try {
-      localStorage.removeItem("crooks.empire.state");
-      localStorage.removeItem("crooks.empire.week");
-      localStorage.removeItem("crooks.empire.month");
-      setStatus("🧹 Cleared local game cache");
-      setTimeout(() => setStatus(""), 2500);
-    } catch {}
-  };
+      const r = await fetch(`${API_BASE}/api/withdraw`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-Wallet-Address": address },
+        body: JSON.stringify({ token: form.token, amount: amt }),
+      });
+      const j = await r.json().catch(()=> ({}));
+      if (!r.ok) throw new Error(j?.error || `Withdraw failed (${r.status})`);
+
+      // refresh UI
+      await fetchBalances();
+      await fetchAnalytics();
+      await refreshStamina().catch(()=>{});
+
+      alert(`Sent ${amt} ${form.token}\nTx: ${j.tx_hash || "pending"}`);
+      setShowModal(false);
+    } catch (e) {
+      alert(e?.message || "Withdraw failed");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div
@@ -189,35 +161,31 @@ export default function Bank() {
           <div>
             <h1 className="text-3xl md:text-4xl font-bold">Bank</h1>
             <p className="opacity-80 text-sm md:text-base">
-              Live balances from backend (fallback to your local game wallet). Request withdrawals anytime.
+              Your in-game balances & withdrawals.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {!networkOk && (
               <span className="text-xs bg-red-500/20 border border-red-400/40 rounded-xl px-2 py-1">
                 Not on Cronos (25)
               </span>
             )}
-            <Link to="/empire/profile" className={BTN_GHOST}>Back to Profile</Link>
+            <Link to="/empire/profile" className={BTN_GHOST}>Profile</Link>
+            <Link to="/empire/heists" className={BTN_GHOST}>Heists</Link>
+            <Link to="/empire/armory" className={BTN_GHOST}>Armory</Link>
+            <Link to="/empire/casino" className={BTN_GHOST}>Casino</Link>
             {address && (
-              <button className={BTN_GHOST} onClick={fetchBackendBalances} disabled={loading}>
+              <button className={BTN_GHOST} onClick={() => { fetchBalances(); fetchAnalytics(); }} disabled={loading}>
                 {loading ? "Refreshing…" : "Refresh"}
               </button>
             )}
           </div>
         </header>
 
-        {/* Wallet + address */}
-        <section className="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Balances */}
-          <div className={`${GLASS} ${SOFT} p-5 lg:col-span-2`}>
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-lg">Balances</h3>
-              <div className="text-[11px] opacity-70">API: <code>{API_BASE}</code></div>
-            </div>
-            <p className="text-xs opacity-70 mt-1">
-              Backend is authoritative when available. Local values shown only if backend has no entry yet.
-            </p>
+        {/* Balances (always show full list incl. zeros) */}
+        <section className="mt-5">
+          <div className={`${GLASS} ${SOFT} p-5`}>
+            <h3 className="font-semibold text-lg">Holdings</h3>
 
             {loading && <div className="mt-4 text-sm opacity-70">Loading…</div>}
             {err && <div className="mt-4 text-sm text-rose-400">{err}</div>}
@@ -225,10 +193,7 @@ export default function Bank() {
             {!loading && !err && (
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                 {TOKENS.map(t => {
-                  const backendVal = backendMap[t.sym];
-                  const localVal = localMap[t.sym];
-                  const val = displayBalances[t.sym] ?? 0;
-                  const source = backendVal !== undefined ? "backend" : "local";
+                  const val = Number(balances[t.sym] ?? 0);
                   return (
                     <div
                       key={t.sym}
@@ -242,7 +207,6 @@ export default function Bank() {
                         <div className="flex flex-col">
                           <span className="font-semibold text-lg">{t.sym}</span>
                           <span className="text-xs opacity-60">{val.toLocaleString()}</span>
-                          <span className="text-[10px] opacity-50">src: {source}</span>
                         </div>
                       </div>
                       {/* RIGHT: Withdraw */}
@@ -260,63 +224,41 @@ export default function Bank() {
               </div>
             )}
           </div>
-
-          {/* Wallet card */}
-          <div className={`${GLASS} ${SOFT} p-5`}>
-            <h3 className="font-semibold text-lg">Your Wallet</h3>
-            <div className="mt-2 text-sm break-all">
-              <span className="opacity-70">Connected:</span><br/>
-              {address ? <code>{address}</code> : <span className="opacity-70">Not connected</span>}
-            </div>
-            <div className="mt-3 text-xs opacity-70">
-              Withdrawals default to your connected wallet — you can override the destination.
-            </div>
-
-            {/* Utilities (local only) */}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button className={BTN_GHOST} onClick={clearLocalGameCache}>
-                Clear local game cache
-              </button>
-              <button className={BTN_GHOST} onClick={() => setWithdrawals(loadQueuedWithdrawals())}>
-                Reload requests
-              </button>
-            </div>
-            {status && <div className="mt-3 text-sm text-emerald-400">{status}</div>}
-          </div>
         </section>
 
-        {/* Withdrawal queue */}
-        <section className="mt-5">
+        {/* Analytics */}
+        <section className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className={`${GLASS} ${SOFT} p-5`}>
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-lg">Your Withdrawal Requests</h3>
-              <button className={BTN_GHOST} onClick={() => setWithdrawals(loadQueuedWithdrawals())}>
-                Refresh
-              </button>
+            <h3 className="font-semibold text-lg">Withdrawn Totals</h3>
+            <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {TOKENS.map(t => (
+                <div key={t.sym} className="bg-white/5 rounded-xl p-3 border border-white/10">
+                  <div className="text-xs opacity-70">{t.sym}</div>
+                  <div className="text-xl font-bold mt-1">
+                    {Number(totals[t.sym] || 0).toLocaleString()}
+                  </div>
+                </div>
+              ))}
             </div>
-            {withdrawals.length === 0 ? (
-              <div className="mt-4 text-sm opacity-70">No requests yet.</div>
-            ) : (
-              <div className="mt-3 space-y-2">
-                {withdrawals.map(w => (
-                  <div key={w.id} className="flex items-center gap-3 border border-white/10 rounded-2xl p-3 bg-white/5">
-                    <div className="w-10 text-center font-mono opacity-70">{w.token}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm">
-                        <b>{w.amount}</b> {w.token} → <span className="opacity-90">{shortAddr(w.to)}</span>
-                      </div>
-                      <div className="text-xs opacity-60">
-                        {new Date(w.createdAt).toLocaleString()} • {w.status}
-                        {w.note ? <> • {w.note}</> : null}
-                      </div>
+          </div>
+
+          <div className={`${GLASS} ${SOFT} p-5`}>
+            <h3 className="font-semibold text-lg">Recent Withdrawals</h3>
+            {recent?.length ? (
+              <div className="mt-3 space-y-2 max-h-72 overflow-auto pr-1">
+                {recent.map((r, i) => (
+                  <div key={i} className="flex items-center justify-between border border-white/10 rounded-xl p-2 bg-white/5">
+                    <div className="text-sm">
+                      <b>{r.token_symbol}</b> {Number(r.amount).toLocaleString()}
+                      <div className="text-[11px] opacity-70">{new Date(r.created_at).toLocaleString()}</div>
                     </div>
+                    <span className="text-xs opacity-80">{r.status}</span>
                   </div>
                 ))}
               </div>
+            ) : (
+              <div className="mt-3 text-sm opacity-70">No withdrawals yet.</div>
             )}
-            <div className="mt-3 text-xs opacity-70">
-              Right now requests are local-only. Next step: POST to your backend and list paid/declined status from staff.
-            </div>
           </div>
         </section>
       </div>
@@ -327,7 +269,7 @@ export default function Bank() {
           <div className="absolute inset-0 bg-black/60" onClick={closeModal} />
           <div className={`${GLASS} ${SOFT} relative w-full max-w-lg p-5`}>
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">Request Withdrawal</h3>
+              <h3 className="text-lg font-semibold">Withdraw</h3>
               <button className={BTN_GHOST} onClick={closeModal}>Close</button>
             </div>
             <form className="mt-4 space-y-3" onSubmit={submitWithdrawal}>
@@ -349,18 +291,18 @@ export default function Bank() {
                   className={INPUT}
                   type="number"
                   min="0"
-                  step="1"
-                  placeholder={`Max: ${formatInt(displayBalances[form.token] ?? 0)}`}
+                  step="any"
+                  placeholder={`Max: ${Number(balances[form.token] ?? 0).toLocaleString()}`}
                   value={form.amount}
                   onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
                 />
                 <div className="mt-1 text-xs opacity-60">
-                  Balance: {formatInt(displayBalances[form.token] ?? 0)} {form.token}{" "}
+                  Balance: {Number(balances[form.token] ?? 0).toLocaleString()} {form.token}{" "}
                   <button
                     type="button"
                     className="underline hover:opacity-100"
                     onClick={() =>
-                      setForm(f => ({ ...f, amount: String(displayBalances[f.token] ?? 0) }))
+                      setForm(f => ({ ...f, amount: String(balances[f.token] ?? 0) }))
                     }
                   >
                     Max
@@ -376,20 +318,13 @@ export default function Bank() {
                   value={form.to}
                   onChange={e => setForm(f => ({ ...f, to: e.target.value }))}
                 />
-              </div>
-              <div>
-                <label className="text-xs opacity-70">Note (optional)</label>
-                <input
-                  className={INPUT}
-                  type="text"
-                  placeholder="Anything staff should know"
-                  value={form.note}
-                  onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
-                />
+                <div className="text-[11px] opacity-60 mt-1">Defaults to your connected wallet.</div>
               </div>
               <div className="pt-2 flex items-center justify-end gap-2">
                 <button type="button" className={BTN_GHOST} onClick={closeModal}>Cancel</button>
-                <button type="submit" className={BTN_PRIMARY}>Submit request</button>
+                <button type="submit" className={BTN_PRIMARY} disabled={busy}>
+                  {busy ? "Sending…" : "Withdraw"}
+                </button>
               </div>
             </form>
           </div>
@@ -397,15 +332,4 @@ export default function Bank() {
       )}
     </div>
   );
-}
-
-// ---------- helpers ----------
-function shortAddr(a) {
-  if (!a) return "";
-  return a.slice(0, 6) + "…" + a.slice(-4);
-}
-function formatInt(n) {
-  const x = Number(n || 0);
-  if (!Number.isFinite(x)) return "0";
-  return x.toLocaleString();
 }
