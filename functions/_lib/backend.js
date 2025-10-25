@@ -87,7 +87,6 @@ export async function addLedgerAndUpsertBalanceByUserId(
   if (upErr) throw new Error(upErr.message);
   return newBal;
 }
-import { createClient } from "@supabase/supabase-js";
 
 // 🟢 Create admin Supabase client using service key
 export function supabaseAdmin(env) {
