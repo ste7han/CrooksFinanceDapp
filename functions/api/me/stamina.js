@@ -14,6 +14,9 @@ const json = (body, status = 200, extra = {}) =>
     headers: { "content-type": "application/json", ...corsHeaders, ...extra },
   });
 
+const HOUR_MS = 60 * 60 * 1000; // 1 ⚡ per uur
+
+// Rank → cap (zoals bij jou)
 const RANK_CAPS = {
   Prospect: 0, Member: 2, Hustler: 4, "Street Soldier": 6, Enforcer: 8,
   Officer: 10, Captain: 12, General: 14, "Gang Leader": 16, Boss: 18,
@@ -69,29 +72,93 @@ export async function onRequestGet({ request, env }) {
     const rankName = await getRankNameForUser_dbFirst(sb, userId);
     const cap = capForRank(rankName);
 
+    // Huidige state ophalen
     const sel = await sb
       .from("stamina_states")
       .select("stamina,cap,updated_at,last_tick_at")
       .eq("user_id", userId)
       .single();
 
+    // Eerste keer → rij aanmaken
     if (sel.error && sel.error.code === "PGRST116") {
+      const nowIso = new Date().toISOString();
       const payload = {
         user_id: userId,
         stamina: 0,
         cap,
-        last_tick_at: new Date().toISOString(),
+        last_tick_at: nowIso,
       };
       const up = await sb.from("stamina_states").upsert(payload, { onConflict: "user_id" });
       if (up.error) return json({ error: up.error.message }, 500);
-      return json({ wallet, user_id: userId, rank: rankName, stamina: 0, cap, fresh: true });
+
+      // Volgende tick-informatie voor UI
+      return json({
+        wallet,
+        user_id: userId,
+        rank: rankName,
+        stamina: 0,
+        cap,
+        fresh: true,
+        updated_at: nowIso,
+        last_tick_at: nowIso,
+        gained: 0,
+        next_tick_ms: cap === 0 ? 0 : HOUR_MS, // over een uur +1 (tenzij cap=0)
+      });
     }
     if (sel.error) return json({ error: sel.error.message }, 500);
 
+    // Auto-regen
     let stamina = Number(sel.data?.stamina || 0);
-    if (sel.data?.cap !== cap) {
+    const prevCap = Number(sel.data?.cap ?? cap);
+    const lastTickAtIso = sel.data?.last_tick_at || new Date().toISOString();
+    const lastTick = Date.parse(lastTickAtIso) || Date.now();
+    const now = Date.now();
+
+    // Als cap is gewijzigd door rank, forceer clamp
+    if (prevCap !== cap) {
       stamina = Math.min(stamina, cap);
-      await sb.from("stamina_states").upsert({ user_id: userId, stamina, cap }, { onConflict: "user_id" });
+    }
+
+    // Hoeveel uur voorbij?
+    const elapsedHours = Math.floor((now - lastTick) / HOUR_MS);
+    const room = Math.max(0, cap - stamina);
+    const gained = Math.max(0, Math.min(room, elapsedHours));
+
+    // Als we iets toevoegen, schuif last_tick_at mee met precies 'gained' uren
+    let newLastTick = lastTick;
+    if (gained > 0) {
+      stamina += gained;
+      newLastTick = lastTick + gained * HOUR_MS;
+
+      const up = await sb
+        .from("stamina_states")
+        .upsert(
+          {
+            user_id: userId,
+            stamina,
+            cap,
+            last_tick_at: new Date(newLastTick).toISOString(),
+          },
+          { onConflict: "user_id" }
+        );
+      if (up.error) return json({ error: up.error.message }, 500);
+    } else if (prevCap !== cap) {
+      // Alleen cap wijzigde? Sla dat ook even op (en clampte stamina al hierboven)
+      const up = await sb
+        .from("stamina_states")
+        .upsert(
+          { user_id: userId, stamina, cap },
+          { onConflict: "user_id" }
+        );
+      if (up.error) return json({ error: up.error.message }, 500);
+    }
+
+    // Bereken ms tot volgende +1 voor de UI (0 als full of cap=0)
+    let next_tick_ms = 0;
+    if (cap > 0 && stamina < cap) {
+      const sinceLast = now - newLastTick;
+      const intoHour = sinceLast % HOUR_MS;
+      next_tick_ms = Math.max(0, HOUR_MS - intoHour);
     }
 
     return json({
@@ -100,8 +167,10 @@ export async function onRequestGet({ request, env }) {
       rank: rankName,
       stamina,
       cap,
-      updated_at: sel.data?.updated_at,
-      last_tick_at: sel.data?.last_tick_at,
+      updated_at: sel.data?.updated_at || null,
+      last_tick_at: new Date(newLastTick).toISOString(),
+      gained,
+      next_tick_ms,
     });
   } catch (e) {
     return json({ error: e.message || "stamina fetch failed" }, 500);
