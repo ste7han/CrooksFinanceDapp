@@ -87,3 +87,15 @@ export async function addLedgerAndUpsertBalanceByUserId(
   if (upErr) throw new Error(upErr.message);
   return newBal;
 }
+import { createClient } from "@supabase/supabase-js";
+
+// 🟢 Create admin Supabase client using service key
+export function supabaseAdmin(env) {
+  const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL;
+  const key = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
+  if (!url || !key) throw new Error("Missing Supabase URL or service key in environment");
+
+  return createClient(url, key, {
+    auth: { persistSession: false },
+  });
+}
