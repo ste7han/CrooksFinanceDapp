@@ -11,7 +11,7 @@ import { Link } from "react-router-dom";
  * - Strength from Weapons NFT metadata (sum of Strength/Power)
  * - Earn Multiplier from CRKS ERC-20 balance
  * - Faction selection & weekly leaderboard (via EmpireContext; persists in localStorage)
- * - Empire stats from store (easy to replace with backend later)
+ * - Balances from backend with local fallback (same behavior as Bank)
  */
 
 // ===== Contracts (Cronos) =====
@@ -27,10 +27,11 @@ const ALL_TOKENS = [
 ];
 
 const CRKS_ADDRESS = (import.meta.env.VITE_CRKS_CA || "").trim(); // set in .env to enable multiplier
+
+// 🔁 Use the same API base as Bank
 const API_BASE =
-  (import.meta.env.VITE_PAGES_API ||
-   import.meta.env.VITE_API_BASE ||
-   "").replace(/\/$/, "");
+  import.meta.env.VITE_BACKEND_URL ||
+  "https://crooks-backend.steph-danser.workers.dev";
 
 const ERC721_ABI = [
   "function balanceOf(address) view returns (uint256)",
@@ -178,7 +179,7 @@ const BADGE = "inline-flex items-center gap-2 rounded-xl px-2 py-1 bg-white/8 bo
 export default function EmpireProfile() {
   const { provider, address, networkOk } = useWallet();
 
-  // 🆕 Balances from backend (Supabase)
+  // Balances from backend (raw rows)
   const [backendBalances, setBackendBalances] = useState([]);
 
   // Empire store (local game state; persisted via localStorage)
@@ -198,72 +199,89 @@ export default function EmpireProfile() {
     refreshStamina,
   } = useEmpire();
 
-
   // Hydrate store with connected wallet + ensure backend user exists
   useEffect(() => {
     if (!address) return;
 
-    // 1) hydrate local Empire state
     hydrateFromWallet(address);
 
-    // 2) ensure backend user exists
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/me`, {
+        await fetch(`${API_BASE}/api/me`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ wallet: address }),
         });
-        await res.text(); // ignore body
       } catch (e) {
         console.warn("[backend] user sync failed:", e);
       }
     })();
   }, [address, hydrateFromWallet]);
 
-  // Fetch balances from backend (top-level effect)
-useEffect(() => {
-  if (!address) {
-    // Show full list with zeros when no wallet yet
-    setBackendBalances(ALL_TOKENS.map(sym => ({ token_symbol: sym, balance: 0 })));
-    return;
-  }
-  (async () => {
-    try {
-      const url = `${API_BASE.replace(/\/api$/, "")}/api/me/balances`;
-      const res = await fetch(url, {
-        headers: { "X-Wallet-Address": address.toLowerCase() },
-        cache: "no-store",
-      });
-      const j = await res.json().catch(() => null);
-
-      // normalize incoming rows → [{ token_symbol, balance }]
-      const incoming = Array.isArray(j?.balances) ? j.balances
-                      : Array.isArray(j) ? j
-                      : [];
-
-      const normalized = incoming.map((row) => {
-        const sym = String(row?.token_symbol || row?.symbol || row?.token || "").toUpperCase();
-        const bal = Number(row?.balance ?? row?.amount ?? 0);
-        return sym ? { token_symbol: sym, balance: Number.isFinite(bal) ? bal : 0 } : null;
-      }).filter(Boolean);
-
-      // Merge with canonical list → always show all tokens
-      const map = new Map(normalized.map(r => [r.token_symbol.toUpperCase(), r.balance]));
-      const complete = ALL_TOKENS.map(sym => ({
-        token_symbol: sym,
-        balance: Number(map.get(sym) ?? 0),
-      }));
-
-      setBackendBalances(complete);
-    } catch (e) {
-      console.warn("Failed to load backend balances:", e);
-      // On error, still show full list with zeros
+  // Fetch balances from backend
+  useEffect(() => {
+    if (!address) {
       setBackendBalances(ALL_TOKENS.map(sym => ({ token_symbol: sym, balance: 0 })));
+      return;
     }
-  })();
-}, [address]);
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/me/balances`, {
+          headers: { "X-Wallet-Address": address },
+          cache: "no-store",
+        });
+        const j = await res.json().catch(() => null);
 
+        const incoming = Array.isArray(j?.balances) ? j.balances
+                        : Array.isArray(j) ? j
+                        : [];
+
+        const normalized = incoming.map((row) => {
+          const sym = String(row?.token_symbol || row?.symbol || row?.token || "").toUpperCase();
+          const bal = Number(row?.balance ?? row?.amount ?? 0);
+          return sym ? { token_symbol: sym, balance: Number.isFinite(bal) ? bal : 0 } : null;
+        }).filter(Boolean);
+
+        // Merge with canonical list → always show all tokens
+        const map = new Map(normalized.map(r => [r.token_symbol.toUpperCase(), r.balance]));
+        const complete = ALL_TOKENS.map(sym => ({
+          token_symbol: sym,
+          balance: Number(map.get(sym) ?? 0),
+        }));
+
+        setBackendBalances(complete);
+      } catch (e) {
+        console.warn("Failed to load backend balances:", e);
+        setBackendBalances(ALL_TOKENS.map(sym => ({ token_symbol: sym, balance: 0 })));
+      }
+    })();
+  }, [address]);
+
+  // 🔁 Make Profile behave like Bank: prefer backend, fallback to local store
+  const backendMap = useMemo(() => {
+    const m = {};
+    for (const r of backendBalances || []) {
+      const sym = String(r?.token_symbol || r?.symbol || r?.token || "").toUpperCase();
+      const num = Number(r?.balance ?? r?.amount ?? 0);
+      if (sym) m[sym] = Number.isFinite(num) ? num : 0;
+    }
+    return m;
+  }, [backendBalances]);
+
+  const localMap = useMemo(() => {
+    const src = empire?.tokensEarned || {};
+    const m = {};
+    ALL_TOKENS.forEach(sym => { m[sym] = Number(src[sym] ?? 0); });
+    return m;
+  }, [empire]);
+
+  const displayBalances = useMemo(() => {
+    return ALL_TOKENS.map(sym => ({
+      token_symbol: sym,
+      balance: Number(backendMap[sym] ?? localMap[sym] ?? 0),
+      source: backendMap[sym] !== undefined ? "backend" : "local",
+    }));
+  }, [backendMap, localMap]);
 
   const [readProvider, setReadProvider] = useState(null);
 
@@ -350,17 +368,15 @@ useEffect(() => {
 
         let sum = 0;
         for (const id of ids) {
-          // tokenURI → metadata → parse Strength/Power
           let meta = null;
           try {
             const uri = await weapons.tokenURI(id);
             const url = resolveMediaUrl(uri);
             if (url) meta = await fetchJson(url);
           } catch {}
-          // fallback: local metadata (optional, matches your Armory)
           if (!meta) meta = await fetchJson(`/metadata_weapons/${id}.json`);
           sum += parseStrength(meta);
-          await sleep(50); // be kind to gateways
+          await sleep(50);
         }
         setTotalStrength(sum);
       } catch (e) {
@@ -380,12 +396,10 @@ useEffect(() => {
 
   useEffect(() => {
     if (!current?.name) return;
-    // Pull stamina+cap from backend and compute nextTickMs internally
     refreshStamina().catch(() => {});
     const id = setInterval(() => refreshStamina().catch(() => {}), 60_000);
     return () => clearInterval(id);
   }, [current?.name, refreshStamina]);
-
 
   // Faction & Stats from store
   const faction = empire.faction;
@@ -439,36 +453,13 @@ useEffect(() => {
             )}
 
             {/* Quick nav */}
-            <Link
-              to="/empire/bank"
-              className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}
-            >
-              Bank
-            </Link>
-            <Link
-              to="/empire/heists"
-              className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}
-            >
-              Heists
-            </Link>
-            <Link
-              to="/empire/armory"
-              className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}
-            >
-              Armory
-            </Link>
-            <Link
-              to="/empire/casino"
-              className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}
-            >
-              Casino
-            </Link>
+            <Link to="/empire/bank" className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}>Bank</Link>
+            <Link to="/empire/heists" className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}>Heists</Link>
+            <Link to="/empire/armory" className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}>Armory</Link>
+            <Link to="/empire/casino" className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}>Casino</Link>
 
-            {/* Manual refresh (kept) */}
-            <button
-              className={BTN_GHOST}
-              onClick={() => { refreshStamina().catch(() => {}); }}
-            >
+            {/* Manual refresh */}
+            <button className={BTN_GHOST} onClick={() => { refreshStamina().catch(() => {}); }}>
               Refresh
             </button>
           </div>
@@ -484,12 +475,7 @@ useEffect(() => {
             </div>
             <div className="mt-3 flex items-center gap-3">
               <div className="w-14 h-14 rounded-xl overflow-hidden bg-white/10 border border-white/10 shrink-0">
-                <img
-                  src={getRankImgSrc(current.name)}
-                  alt={`${current.name} badge`}
-                  className="w-full h-full object-cover"
-                  loading="lazy"
-                />
+                <img src={getRankImgSrc(current.name)} alt={`${current.name} badge`} className="w-full h-full object-cover" loading="lazy" />
               </div>
               <div className="text-sm opacity-80">
                 Holdings: <b>{crklCount} {crklMeta.symbol}</b>
@@ -517,9 +503,7 @@ useEffect(() => {
             <div className="text-sm opacity-70">Earn Multiplier</div>
             <div className="mt-1 text-3xl font-bold">{bonusFactor.toFixed(2)}×</div>
             <div className="mt-1 text-xs opacity-70">Bonus: +{bonusPct.toFixed(2)}% from {crksHuman.toLocaleString()} CRKS</div>
-            {!CRKS_ADDRESS && (
-              <div className="mt-2 text-xs opacity-60">Set <code>VITE_CRKS_CA</code> to auto-detect CRKS balance.</div>
-            )}
+            {!CRKS_ADDRESS && <div className="mt-2 text-xs opacity-60">Set <code>VITE_CRKS_CA</code> to auto-detect CRKS balance.</div>}
           </div>
 
           {/* Faction snapshot */}
@@ -529,11 +513,7 @@ useEffect(() => {
             {faction && (
               <div className="mt-2 inline-flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg overflow-hidden bg-white/10 border border-white/10">
-                  {faction.logo ? (
-                    <img src={faction.logo} alt={faction.name} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-xs">{faction.initials}</div>
-                  )}
+                  {faction.logo ? <img src={faction.logo} alt={faction.name} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-xs">{faction.initials}</div>}
                 </div>
                 <span className={BADGE}>Token: {faction.token}</span>
               </div>
@@ -565,12 +545,7 @@ useEffect(() => {
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-lg overflow-hidden bg-white/10 border border-white/10 shrink-0">
-                      <img
-                        src={getRankImgSrc(r.name)}
-                        alt={`${r.name} badge`}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
+                      <img src={getRankImgSrc(r.name)} alt={`${r.name} badge`} className="w-full h-full object-cover" loading="lazy" />
                     </div>
                     <div className="text-sm">
                       <span className="font-medium">{rankEmoji(r.name)}{r.name}</span>{" "}
@@ -588,11 +563,7 @@ useEffect(() => {
         <section className={`${GLASS} ${SOFT_SHADOW} p-5 mt-5`}>
           <div className="flex items-center justify-between">
             <h2 className="font-semibold text-lg">Choose your Faction</h2>
-            {faction && (
-              <button className={BTN_GHOST} onClick={clearFaction}>
-                Clear choice
-              </button>
-            )}
+            {faction && <button className={BTN_GHOST} onClick={clearFaction}>Clear choice</button>}
           </div>
           <p className="mt-1 text-sm opacity-80">
             The points you earn in Crooks Empire will be linked to your chosen faction. Weekly/monthly winners will get rewards (TBD).
@@ -609,11 +580,7 @@ useEffect(() => {
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-12 h-12 rounded-xl overflow-hidden bg-white/10 border border-white/10 shrink-0">
-                      {f.logo ? (
-                        <img src={f.logo} alt={f.name} className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center font-semibold">{f.initials}</div>
-                      )}
+                      {f.logo ? <img src={f.logo} alt={f.name} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center font-semibold">{f.initials}</div>}
                     </div>
                     <div>
                       <div className="font-semibold">{f.name}</div>
@@ -629,19 +596,19 @@ useEffect(() => {
           </div>
         </section>
 
-        {/* Empire stats (backend balances) */}
+        {/* Empire stats (backend balances merged with local fallback) */}
         <section className="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className={`${GLASS} ${SOFT_SHADOW} p-5 lg:col-span-2`}>
-            <h3 className="font-semibold text-lg">Balances (from backend)</h3>
+            <h3 className="font-semibold text-lg">Balances</h3>
             <p className="text-xs opacity-70 mt-1">
-              Live balances from Supabase via your Cloudflare Worker.
+              Backend is authoritative when available. Local values are shown only if the backend has no entry yet.
             </p>
 
-            {backendBalances.length === 0 ? (
+            {displayBalances.length === 0 ? (
               <div className="mt-3 text-sm opacity-70">No balances yet.</div>
             ) : (
               <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {backendBalances.map(r => (
+                {displayBalances.map(r => (
                   <StatTile key={r.token_symbol} label={r.token_symbol} value={Number(r.balance).toLocaleString()} />
                 ))}
               </div>
@@ -656,35 +623,31 @@ useEffect(() => {
               <StatTile label="Losses" value={formatInt(stats.heists.losses)} />
             </div>
             <div className="mt-4">
-              {/* Current Stamina (backend-authoritative) */}
-              <div className="mt-4">
-                <div className="flex items-center justify-between text-sm opacity-70 mb-1">
-                  <span>Current Stamina</span>
-                  <span>
-                    {(Number(staminaCap) === 0 || Number(stamina) >= Number(staminaCap))
-                      ? "Full"
-                      : `Next +1 in ${fmtETA(nextTickMs || 0)}`}
-                  </span>
-                </div>
-                {(() => {
-                  const cap = Number(staminaCap ?? 0);
-                  const cur = Number(stamina ?? 0);
-                  const pct = cap > 0 ? Math.min(100, Math.round((cur / cap) * 100)) : 0;
-                  return (
-                    <>
-                      <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
-                        <div className="h-full bg-indigo-400 rounded-full transition-all" style={{ width: `${pct}%` }} />
-                      </div>
-                      <div className="mt-1 text-xs opacity-70">
-                        {cur} / {cap} ({pct}%)
-                      </div>
-                    </>
-                  );
-                })()}
+              <div className="flex items-center justify-between text-sm opacity-70 mb-1">
+                <span>Current Stamina</span>
+                <span>
+                  {(Number(staminaCap) === 0 || Number(stamina) >= Number(staminaCap))
+                    ? "Full"
+                    : `Next +1 in ${fmtETA(nextTickMs || 0)}`}
+                </span>
               </div>
+              {(() => {
+                const cap = Number(staminaCap ?? 0);
+                const cur = Number(stamina ?? 0);
+                const pct = cap > 0 ? Math.min(100, Math.round((cur / cap) * 100)) : 0;
+                return (
+                  <>
+                    <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div className="h-full bg-indigo-400 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="mt-1 text-xs opacity-70">
+                      {cur} / {cap} ({pct}%)
+                    </div>
+                  </>
+                );
+              })()}
             </div>
 
-            {/* DEV quick controls (show only with ?dev=1) */}
             {new URLSearchParams(location.search).get("dev") === "1" && (
               <div className="mt-3 flex flex-wrap gap-2">
                 <button className={BTN_GHOST} onClick={() => awardTokens({ CRKS: 50, MOON: 10 }, { addFactionPoints: 50 })}>
@@ -705,12 +668,7 @@ useEffect(() => {
           <div className={`${GLASS} ${SOFT_SHADOW} p-5`}>
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-lg">Faction Leaderboard (This week)</h3>
-              <button
-                className={BTN_PRIMARY}
-                onClick={() => {
-                  // later: fetch from backend; today it's derived from local store
-                }}
-              >
+              <button className={BTN_PRIMARY} onClick={() => { /* later: backend fetch */ }}>
                 Refresh
               </button>
             </div>
@@ -724,11 +682,7 @@ useEffect(() => {
                     <div key={row.id} className="flex items-center gap-3 py-2 border-b border-white/10 last:border-b-0">
                       <div className="w-8 text-center opacity-70">{i + 1}</div>
                       <div className="w-8 h-8 rounded-lg overflow-hidden bg-white/10 border border-white/10 shrink-0">
-                        {f?.logo ? (
-                          <img src={f.logo} alt={f?.name} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-xs">{f?.initials}</div>
-                        )}
+                        {f?.logo ? <img src={f.logo} alt={f?.name} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-xs">{f?.initials}</div>}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="truncate">{f?.name || row.id}</div>
