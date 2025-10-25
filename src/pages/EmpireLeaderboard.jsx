@@ -45,6 +45,7 @@ export default function EmpireLeaderboard() {
   const { address } = useWallet();
   const [category, setCategory] = useState("strength");
   const [period, setPeriod] = useState("week");
+  const [tokenFilter, setTokenFilter] = useState("ALL");     // 🟢 NEW
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -55,32 +56,24 @@ export default function EmpireLeaderboard() {
     { key: "factions", label: "Top Factions", desc: "Faction-wide dominance" },
     { key: "payouts", label: "Most Payouts", desc: "Highest token earnings overall" },
   ];
+
   const periods = ["week", "month", "all"];
+  const tokenOptions = ["ALL", "CRO", "CRKS", "MOON", "BONE", "BOBZ", "KRIS", "CRY", "CROCARD"];
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       setRows([]);
       let url = `${BACKEND}/api/leaderboard/${category}`;
-      if (category !== "strength" && category !== "payouts") {
-        url += `?period=${period}`;
-      }
+      if (category !== "strength" && category !== "payouts") url += `?period=${period}`;
+      if (category === "payouts" && tokenFilter && tokenFilter !== "ALL")
+        url += `?token=${tokenFilter}`;
       const data = await fetchJson(url);
-      // fallback mock data if backend not connected yet
-      const mock = data?.length
-        ? data
-        : Array.from({ length: 10 }).map((_, i) => ({
-            rank: i + 1,
-            wallet: `0xMOCK${i.toString().padStart(3, "0")}ABCDEF${i}`,
-            value: Math.floor(Math.random() * 5000) + 1000,
-            token: category === "payouts" ? (i % 2 === 0 ? "MOON" : "CRKS") : null,
-            faction: category === "factions" ? (i % 2 === 0 ? "East" : "West") : null,
-          }));
-      await sleep(200);
-      setRows(mock);
+      setRows(Array.isArray(data) ? data : []);
       setLoading(false);
     })();
-  }, [category, period]);
+  }, [category, period, tokenFilter]);
+
 
   // Animated list transitions
   const variants = {
@@ -157,6 +150,21 @@ export default function EmpireLeaderboard() {
           </div>
 
           {loading && <div className="opacity-70 text-sm">Loading data…</div>}
+
+          {category === "payouts" && (
+            <div className="mb-4 flex flex-wrap gap-2">
+                {tokenOptions.map((t) => (
+                <button
+                    key={t}
+                    className={BTN_TOGGLE(tokenFilter === t)}
+                    onClick={() => setTokenFilter(t)}
+                >
+                    {t}
+                </button>
+                ))}
+            </div>
+            )}
+
 
           {!loading && (
             <div className="overflow-x-auto">
