@@ -719,7 +719,8 @@ function clamp(n, a, b) { return Math.max(a, Math.min(b, Number(n || 0))); }
 function formatInt(n) {
   const x = Number(n || 0);
   if (!Number.isFinite(x)) return "0";
-  return x.toLocaleString();
+  // forceer 1,000 notatie overal
+  return x.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 function fmt(n, maxFrac = 0) {
   const x = Number(n ?? 0);
@@ -729,4 +730,10 @@ function fmt(n, maxFrac = 0) {
     maximumFractionDigits: maxFrac,
     useGrouping: true,
   });
+}
+function fmtETA(ms) {
+  const sec = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const m = Math.floor(sec / 60);
+  const s = String(sec % 60).padStart(2, "0");
+  return `${m}:${s}`; // mm:ss
 }
