@@ -16,16 +16,29 @@ const json = (body, status = 200) =>
 
 export const onRequestOptions = () => new Response(null, { headers: corsHeaders });
 
-function getWalletLowerFromAny(request, url) {
+async function getWalletLowerFromAny(request, url) {
+  // 1. Header
   let w = request.headers.get("X-Wallet-Address");
-  if (!w) w = url.searchParams.get("wallet") || "";
-  if (!/^0x[a-fA-F0-9]{40}$/.test(w)) return null;
+
+  // 2. Query
+  if (!w) w = url.searchParams.get("wallet");
+
+  // 3. Body fallback (zoals jij doet met -d '{"wallet":"0x..."}')
+  if (!w) {
+    try {
+      const body = await request.clone().json();
+      if (body?.wallet) w = body.wallet;
+    } catch (_) {}
+  }
+
+  if (!/^0x[a-fA-F0-9]{40}$/.test(w || "")) return null;
   return w.toLowerCase();
 }
 
+
 export async function onRequestPost({ request, env }) {
   const url = new URL(request.url);
-  const wallet = getWalletLowerFromAny(request, url);
+  const wallet = await getWalletLowerFromAny(request, url);
   if (!wallet) return json({ error: "Missing or invalid wallet" }, 400);
 
   const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE, {
