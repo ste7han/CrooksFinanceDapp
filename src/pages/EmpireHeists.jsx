@@ -329,6 +329,9 @@ export default function EmpireHeists() {
 
       awardTokens?.(res.rewards, { addFactionPoints: res.pointsChange });
 
+      // inside onPlay(), right before apiFetch("rewardBatch", …)
+      const idem = `heist:${key}:${Date.now()}:${Math.random().toString(36).slice(2,8)}`;
+
       // Persist rewards server-side (best-effort)
       try {
         await apiFetch("rewardBatch", {
@@ -336,9 +339,10 @@ export default function EmpireHeists() {
           wallet: address,
           body: {
             wallet: address,
-            rewards: res.rewards,
+            rewards: res.rewards,     // e.g. { CRKS: 5, MOON: 1 }
             reason: "heist_reward",
             ref: `heist:${key}`,
+            idempotency_key: idem,
           },
         });
       } catch (e) {
