@@ -53,6 +53,18 @@ export default function Bank() {
     setForm(prev => ({ ...prev, to: address || "" }));
   }, [address]);
 
+  // Force US-style grouping (76,613) without decimals
+  function fmt(n, maxFrac = 0) {
+    const x = Number(n ?? 0);
+    if (!Number.isFinite(x)) return "0";
+    return x.toLocaleString("en-US", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: maxFrac,
+      useGrouping: true,
+    });
+  }
+
+
   // --- balances: same approach as your working file ---
   const fetchBalances = async () => {
     if (!address) return;
@@ -206,7 +218,7 @@ export default function Bank() {
                         </div>
                         <div className="flex flex-col">
                           <span className="font-semibold text-lg">{t.sym}</span>
-                          <span className="text-xs opacity-60">{val.toLocaleString()}</span>
+                          <span className="text-xs opacity-60">{fmt(val)}</span>
                         </div>
                       </div>
                       <button
@@ -234,7 +246,7 @@ export default function Bank() {
                 <div key={t.sym} className="bg-white/5 rounded-xl p-3 border border-white/10">
                   <div className="text-xs opacity-70">{t.sym}</div>
                   <div className="text-xl font-bold mt-1">
-                    {Number(totals[t.sym] || 0).toLocaleString()}
+                    {fmt(totals[t.sym] || 0)}
                   </div>
                 </div>
               ))}
@@ -248,7 +260,7 @@ export default function Bank() {
                 {recent.map((r, i) => (
                   <div key={i} className="flex items-center justify-between border border-white/10 rounded-xl p-2 bg-white/5">
                     <div className="text-sm">
-                      <b>{r.token_symbol}</b> {Number(r.amount).toLocaleString()}
+                      <b>{r.token_symbol}</b> {fmt(r.amount)}
                       <div className="text-[11px] opacity-70">{r.created_at ? new Date(r.created_at).toLocaleString() : ""}</div>
                     </div>
                     <span className="text-xs opacity-80">{r.status || "paid"}</span>
@@ -290,7 +302,7 @@ export default function Bank() {
                   onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
                 />
                 <div className="mt-1 text-xs opacity-60">
-                  Balance: {Number(balances[form.token] ?? 0).toLocaleString()} {form.token}{" "}
+                  Balance: {Number(balances[form.token] ?? 0).toLocaleString()} {form.token} {" "}
                   <button type="button" className="underline hover:opacity-100" onClick={() => setForm(f => ({ ...f, amount: String(balances[f.token] ?? 0) }))}>
                     Max
                   </button>

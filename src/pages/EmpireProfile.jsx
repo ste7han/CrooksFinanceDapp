@@ -502,7 +502,7 @@ export default function EmpireProfile() {
           <div className={`${GLASS} ${SOFT_SHADOW} p-5`}>
             <div className="text-sm opacity-70">Earn Multiplier</div>
             <div className="mt-1 text-3xl font-bold">{bonusFactor.toFixed(2)}×</div>
-            <div className="mt-1 text-xs opacity-70">Bonus: +{bonusPct.toFixed(2)}% from {crksHuman.toLocaleString()} CRKS</div>
+            <div className="mt-1 text-xs opacity-70">Bonus: +{bonusPct.toFixed(2)}% from {fmt(crksHuman)} CRKS</div>
             {!CRKS_ADDRESS && <div className="mt-2 text-xs opacity-60">Set <code>VITE_CRKS_CA</code> to auto-detect CRKS balance.</div>}
           </div>
 
@@ -527,7 +527,7 @@ export default function EmpireProfile() {
             <h3 className="font-semibold text-lg">Wallet Snapshot</h3>
             <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
               <StatTile label="CRKL Held" value={crklCount} />
-              <StatTile label="CRKS (multiplier)" value={crksHuman.toLocaleString()} />
+              <StatTile label="CRKS (multiplier)" value={fmt(crksHuman)} />
               <StatTile label="Rank" value={current.id} />
               <StatTile label="Total Strength" value={totalStrength} />
             </div>
@@ -609,7 +609,7 @@ export default function EmpireProfile() {
             ) : (
               <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {displayBalances.map(r => (
-                  <StatTile key={r.token_symbol} label={r.token_symbol} value={Number(r.balance).toLocaleString()} />
+                  <StatTile key={r.token_symbol} label={r.token_symbol} value={fmt(r.balance)} />
                 ))}
               </div>
             )}
@@ -688,7 +688,7 @@ export default function EmpireProfile() {
                         <div className="truncate">{f?.name || row.id}</div>
                         <div className="text-xs opacity-70">Token: {f?.token}</div>
                       </div>
-                      <div className="font-mono">{row.points.toLocaleString()}</div>
+                      <div className="font-mono">{fmt(row.points)}</div>
                     </div>
                   );
                 })}
@@ -721,9 +721,12 @@ function formatInt(n) {
   if (!Number.isFinite(x)) return "0";
   return x.toLocaleString();
 }
-function fmtETA(ms) {
-  const sec = Math.max(0, Math.ceil((Number(ms) || 0) / 1000));
-  const m = Math.floor(sec / 60);
-  const s = String(sec % 60).padStart(2, "0");
-  return `${m}:${s}`;
+function fmt(n, maxFrac = 0) {
+  const x = Number(n ?? 0);
+  if (!Number.isFinite(x)) return "0";
+  return x.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: maxFrac,
+    useGrouping: true,
+  });
 }
