@@ -7,6 +7,7 @@ const TILES = [
   { label: "Armory",  to: "/empire/armory",  img: "/pictures/Armory_banner.png",  title: "Open Armory" },
   { label: "Heists",  to: "/empire/heists",  img: "/pictures/Heists_banner.png",  title: "Open Heists" },
   { label: "Casino",  to: "/empire/casino",  img: "/pictures/Casino_banner.png",  title: "Open Casino" },
+  { label: "Leaderboard", to: "/empire/leaderboard", img: "/pictures/Leaderboard_banner.png", title: "View Leaderboard" },
 ];
 
 export default function CrooksEmpire() {
