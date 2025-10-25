@@ -230,8 +230,9 @@ useEffect(() => {
   }
   (async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/me/balances`, {
-        headers: { "X-Wallet-Address": address },
+      const url = `${API_BASE.replace(/\/api$/, "")}/api/me/balances`;
+      const res = await fetch(url, {
+        headers: { "X-Wallet-Address": address.toLowerCase() },
         cache: "no-store",
       });
       const j = await res.json().catch(() => null);
