@@ -8,6 +8,7 @@ import EmpireProfile from "./pages/EmpireProfile";
 import EmpireBank from "./pages/EmpireBank.jsx";
 import EmpireHeists from "./pages/EmpireHeists.jsx";
 import AdminPanel from "./pages/AdminPanel.jsx";
+import EmpireLeaderboard from "./pages/EmpireLeaderboard.jsx";
 import { WalletProvider } from "./context/WalletContext";
 import { EmpireProvider } from "./context/EmpireContext";   // ✅ import this
 
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="/empire/profile" element={<EmpireProfile />} />
               <Route path="/empire/bank" element={<EmpireBank />} />
               <Route path="/empire/heists" element={<EmpireHeists />} />
+              <Route path="/empire/leaderboard" element={<EmpireLeaderboard />} />
               <Route path="/admin" element={<AdminPanel />} />
               <Route path="/empire/casino" element={<div />} />
             </Routes>
