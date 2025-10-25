@@ -107,8 +107,8 @@ export function EmpireProvider({ children }) {
   const [staminaCap, setStaminaCap] = useState(null);
   const [lastTickAt, setLastTickAt] = useState(null); // ISO string from backend
 
-  // a 1s ticker so countdown updates visually
-  const [, setNow] = useState(Date.now());
+  // a 1s ticker so countdown & progress bar update visually
+  const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
@@ -258,13 +258,12 @@ const refreshStamina = useCallback(async () => {
     if (stamina == null || staminaCap == null) return { nextTickMs: 0, nextTickAt: null };
     const full = staminaCap === 0 || stamina >= staminaCap;
     if (full) return { nextTickMs: 0, nextTickAt: null };
-    const last = lastTickAt ? Date.parse(lastTickAt) : Date.now();
-    const now = Date.now();
+    const last = lastTickAt ? Date.parse(lastTickAt) : Date.now();  
     const elapsed = now - last;
     const intoHour = elapsed % HOUR_MS;
     const msToNext = Math.max(0, HOUR_MS - intoHour);
     return { nextTickMs: msToNext, nextTickAt: new Date(now + msToNext).toISOString() };
-  }, [stamina, staminaCap, lastTickAt]);
+  }, [stamina, staminaCap, lastTickAt, now]);  // <-- depend on 'now'
 
   /* ---------- legacy wrappers (no server mutation) ---------- */
   const setStamina = useCallback(
@@ -300,15 +299,14 @@ const refreshStamina = useCallback(async () => {
       };
     }
     const last = lastTickAt ? Date.parse(lastTickAt) : Date.now();
-    const now = Date.now();
-    const elapsed = now - last;
+    const elapsed = now - last;  // will close over the ticking 'now' state
     const intoHour = elapsed % HOUR_MS;
     const pctToNext = Math.min(1, intoHour / HOUR_MS);
     const nextAt = last + (Math.floor(elapsed / HOUR_MS) + 1) * HOUR_MS;
     const msToNext = Math.max(0, nextAt - now);
 
     return { cap, stamina: s, pctToNext, msToNext, nextAt, isFull: false };
-  }, [stamina, staminaCap, lastTickAt]);
+  }, [stamina, staminaCap, lastTickAt, now]);
 
   /* ---------- value ---------- */
   const value = useMemo(
