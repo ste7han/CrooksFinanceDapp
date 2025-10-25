@@ -387,13 +387,17 @@ export default function EmpireHeists() {
             <h1 className="text-3xl md:text-4xl font-bold">Heists</h1>
             <p className="opacity-80 text-sm md:text-base">Pick a job, spend stamina, and stack tokens & points.</p>
           </div>
-          <div className="flex items-center gap-2">
+
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             {!networkOk && (
               <span className="text-xs bg-red-500/20 border border-red-400/40 rounded-xl px-2 py-1">
                 Not on Cronos (25)
               </span>
             )}
-            <Link to="/empire/profile" className={BTN_GHOST}>Back to Profile</Link>
+            <Link to="/empire/bank" className={BTN_GHOST}>Bank</Link>
+            <Link to="/empire/armory" className={BTN_GHOST}>Armory</Link>
+            <Link to="/empire/casino" className={BTN_GHOST}>Casino</Link>
+            <Link to="/empire/profile" className={BTN_GHOST}>Profile</Link>
           </div>
         </header>
 
