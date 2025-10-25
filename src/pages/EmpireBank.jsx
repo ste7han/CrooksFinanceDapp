@@ -13,11 +13,15 @@ const BTN_PRIMARY = `${BTN} bg-emerald-500 text-black hover:bg-emerald-400`;
 const INPUT = "bg-white/5 border border-white/10 rounded-xl px-3 py-2 w-full outline-none focus:border-emerald-400/60";
 
 // ---------- Constants ----------
-const API_BASE =
+// Normalize API base so we never end up with /api/api/...
+const RAW_API_BASE =
   (import.meta.env.VITE_PAGES_API ||
    import.meta.env.VITE_API_BASE ||
    import.meta.env.VITE_BACKEND_URL ||
-   "").replace(/\/$/, "");
+   "").trim();
+const API_BASE = RAW_API_BASE
+  .replace(/\/+$/, "")       // strip trailing slashes
+  .replace(/\/api$/, "");    // strip trailing /api if present
 
 const TOKENS = [
   { sym: "CRO",     label: "Cronos",            icon: "/pictures/factions/cro.png",               decimals: 18 },
@@ -33,68 +37,78 @@ const TOKENS = [
 // ---------- Component ----------
 export default function Bank() {
   const { address, networkOk } = useWallet();
-  const { refreshStamina } = useEmpire();
+  const { refreshStamina, state: empire } = useEmpire();
 
-  // Backend balances map {SYM: number}
-  const [balances, setBalances] = useState(() => Object.fromEntries(TOKENS.map(t => [t.sym, 0])));
+  // Balances map {SYM: number} — always show all tokens (incl. zeros)
+  const [balances, setBalances] = useState(() =>
+    Object.fromEntries(TOKENS.map(t => [t.sym, 0]))
+  );
+
+  // Analytics (from first version)
+  const [totals, setTotals] = useState({}); // {SYM: number withdrawn}
+  const [recent, setRecent] = useState([]); // last 10 rows
+
+  // Misc UI state
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-
-  // Withdraw modal state
   const [showModal, setShowModal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ token: "CRKS", amount: "", to: "", note: "" });
 
-  // Analytics
-  const [totals, setTotals] = useState({});   // {SYM: number withdrawn}
-  const [recent, setRecent] = useState([]);   // last 10 rows
-
-  // default recipient = connected wallet
+  // Default recipient = connected wallet
   useEffect(() => {
     setForm(prev => ({ ...prev, to: address || "" }));
   }, [address]);
 
-  // fetch balances (always show all tokens incl. zeros)
+  // ----- Balance loader (logic proven in your “working” version) -----
   const fetchBalances = async () => {
     if (!address) return;
     try {
       setLoading(true);
       setErr("");
 
-      // ensure user
+      // Ensure user exists (best-effort)
       await fetch(`${API_BASE}/api/me`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ wallet: address }),
-      }).catch(()=>{});
+      }).catch(() => {});
 
       const res = await fetch(`${API_BASE}/api/me/balances`, {
         headers: { "X-Wallet-Address": address },
         cache: "no-store",
       });
-      const j = await res.json().catch(() => ({}));
+
+      // Build a full map for our canonical token list
       const map = Object.fromEntries(TOKENS.map(t => [t.sym, 0]));
-      for (const row of (j?.balances || [])) {
-        const sym = String(row?.token_symbol || "").toUpperCase();
-        const num = Number(row?.balance || 0);
+      const j = await res.json().catch(() => ({}));
+
+      // Accept both {balances:[...]} and raw array []
+      const rows = Array.isArray(j?.balances) ? j.balances : (Array.isArray(j) ? j : []);
+      for (const row of rows) {
+        const sym = String(row?.token_symbol || row?.symbol || row?.token || "").toUpperCase();
+        const num = Number(row?.balance ?? row?.amount ?? 0);
         if (sym in map) map[sym] = Number.isFinite(num) ? num : 0;
       }
+
       setBalances(map);
     } catch (e) {
       setErr(e?.message || "Failed to load balances");
+      // Keep previous balances; page still renders the cards
     } finally {
       setLoading(false);
     }
   };
 
+  // ----- Analytics (kept from first version) -----
   const fetchAnalytics = async () => {
     if (!address) { setTotals({}); setRecent([]); return; }
     try {
-      const r = await fetch(`${API_BASE}/api/me/withdrawals?wallet=${encodeURIComponent(address)}`, {
-        headers: { "X-Wallet-Address": address },
-        cache: "no-store",
-      });
-      const j = await r.json().catch(()=> ({}));
+      const r = await fetch(
+        `${API_BASE}/api/me/withdrawals?wallet=${encodeURIComponent(address)}`,
+        { headers: { "X-Wallet-Address": address }, cache: "no-store" }
+      );
+      const j = await r.json().catch(() => ({}));
       setTotals(j?.totals || {});
       setRecent(j?.recent || []);
     } catch {
@@ -102,7 +116,12 @@ export default function Bank() {
     }
   };
 
-  useEffect(() => { if (address) { fetchBalances(); fetchAnalytics(); } }, [address]);
+  useEffect(() => {
+    if (address) {
+      fetchBalances();
+      fetchAnalytics();
+    }
+  }, [address]);
 
   function openWithdraw(sym) {
     setForm({ token: sym, amount: "", to: address || "", note: "" });
@@ -124,18 +143,20 @@ export default function Bank() {
     try {
       const r = await fetch(`${API_BASE}/api/withdraw`, {
         method: "POST",
-        headers: { "content-type": "application/json", "X-Wallet-Address": address },
-        body: JSON.stringify({ token: form.token, amount: amt }),
+        headers: {
+          "content-type": "application/json",
+          "X-Wallet-Address": address,
+        },
+        body: JSON.stringify({ token: form.token, amount: amt, to: form.to, note: form.note }),
       });
-      const j = await r.json().catch(()=> ({}));
+      const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error || `Withdraw failed (${r.status})`);
 
-      // refresh UI
       await fetchBalances();
       await fetchAnalytics();
-      await refreshStamina().catch(()=>{});
+      await refreshStamina().catch(() => {});
 
-      alert(`Sent ${amt} ${form.token}\nTx: ${j.tx_hash || "pending"}`);
+      alert(`Sent ${amt} ${form.token}\n${j.tx_hash ? `Tx: ${j.tx_hash}` : "Tx pending"}`);
       setShowModal(false);
     } catch (e) {
       alert(e?.message || "Withdraw failed");
@@ -175,7 +196,11 @@ export default function Bank() {
             <Link to="/empire/armory" className={BTN_GHOST}>Armory</Link>
             <Link to="/empire/casino" className={BTN_GHOST}>Casino</Link>
             {address && (
-              <button className={BTN_GHOST} onClick={() => { fetchBalances(); fetchAnalytics(); }} disabled={loading}>
+              <button
+                className={BTN_GHOST}
+                onClick={() => { fetchBalances(); fetchAnalytics(); }}
+                disabled={loading}
+              >
                 {loading ? "Refreshing…" : "Refresh"}
               </button>
             )}
@@ -185,7 +210,10 @@ export default function Bank() {
         {/* Balances (always show full list incl. zeros) */}
         <section className="mt-5">
           <div className={`${GLASS} ${SOFT} p-5`}>
-            <h3 className="font-semibold text-lg">Holdings</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-lg">Holdings</h3>
+              <div className="text-[11px] opacity-70">API: <code>{API_BASE || "(same-origin)"}</code></div>
+            </div>
 
             {loading && <div className="mt-4 text-sm opacity-70">Loading…</div>}
             {err && <div className="mt-4 text-sm text-rose-400">{err}</div>}
@@ -199,7 +227,6 @@ export default function Bank() {
                       key={t.sym}
                       className="flex items-center justify-between border border-white/10 rounded-2xl p-4 bg-white/5 hover:bg-white/10 transition"
                     >
-                      {/* LEFT: icon + token */}
                       <div className="flex items-center gap-3">
                         <div className="w-12 h-12 rounded-xl overflow-hidden bg-white/10 border border-white/10 shrink-0">
                           <img src={t.icon} alt={t.sym} className="w-full h-full object-cover" />
@@ -209,7 +236,6 @@ export default function Bank() {
                           <span className="text-xs opacity-60">{val.toLocaleString()}</span>
                         </div>
                       </div>
-                      {/* RIGHT: Withdraw */}
                       <button
                         className="px-3 py-1.5 text-xs rounded-lg bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-40 disabled:cursor-not-allowed"
                         onClick={() => openWithdraw(t.sym)}
@@ -250,9 +276,11 @@ export default function Bank() {
                   <div key={i} className="flex items-center justify-between border border-white/10 rounded-xl p-2 bg-white/5">
                     <div className="text-sm">
                       <b>{r.token_symbol}</b> {Number(r.amount).toLocaleString()}
-                      <div className="text-[11px] opacity-70">{new Date(r.created_at).toLocaleString()}</div>
+                      <div className="text-[11px] opacity-70">
+                        {r.created_at ? new Date(r.created_at).toLocaleString() : ""}
+                      </div>
                     </div>
-                    <span className="text-xs opacity-80">{r.status}</span>
+                    <span className="text-xs opacity-80">{r.status || "paid"}</span>
                   </div>
                 ))}
               </div>
@@ -301,9 +329,7 @@ export default function Bank() {
                   <button
                     type="button"
                     className="underline hover:opacity-100"
-                    onClick={() =>
-                      setForm(f => ({ ...f, amount: String(balances[f.token] ?? 0) }))
-                    }
+                    onClick={() => setForm(f => ({ ...f, amount: String(balances[f.token] ?? 0) }))}
                   >
                     Max
                   </button>
@@ -332,4 +358,15 @@ export default function Bank() {
       )}
     </div>
   );
+}
+
+// ---------- helpers ----------
+function shortAddr(a) {
+  if (!a) return "";
+  return a.slice(0, 6) + "…" + a.slice(-4);
+}
+function formatInt(n) {
+  const x = Number(n || 0);
+  if (!Number.isFinite(x)) return "0";
+  return x.toLocaleString();
 }
