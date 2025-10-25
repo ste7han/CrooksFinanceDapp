@@ -315,7 +315,7 @@ export default function EmpireHeists() {
       // Optional instant local feedback (kept, but we'll re-sync right after)
       setStamina((s) => Math.max(0, Number(s || 0) - (res.staminaCost || 0)));
 
-      // 2) Resolve result
+            // 2) Resolve result
       if (!res.success) {
         recordHeist?.("loss");
         setResult({
@@ -349,6 +349,38 @@ export default function EmpireHeists() {
         console.warn("[backend] rewardBatch failed:", e?.message);
       }
 
+      // ✅ NEW: record the heist + points in Supabase
+      try {
+        await fetch("/api/recordHeist", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Wallet-Address": address,
+          },
+          body: JSON.stringify({
+            success: res.success,
+            points: res.pointsChange,
+            staminaCost: res.staminaCost,
+            heistKey: key,
+          }),
+        });
+
+        await fetch("/api/recordPoints", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Wallet-Address": address,
+          },
+          body: JSON.stringify({
+            points: res.pointsChange,
+            faction: empire.faction || "neutral",
+          }),
+        });
+      } catch (err) {
+        console.warn("[backend] recordHeist/recordPoints failed:", err?.message);
+      }
+
+      // ✅ continue as before
       recordHeist?.("win");
       setResult({
         success: true,
@@ -359,6 +391,7 @@ export default function EmpireHeists() {
         luckyMultiplier: res.luckyMultiplier,
         staminaCost: res.staminaCost,
       });
+
     } finally {
       // Always re-sync with backend at the end so UI shows the new value
       await refreshStamina().catch(() => {});
