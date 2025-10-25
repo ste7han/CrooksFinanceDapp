@@ -1,4 +1,4 @@
-import { json, supabaseAdmin } from "./_lib/backend.js";
+import { json, supabaseAdmin } from "../_lib/backend.js";
 
 export async function onRequestPost(context) {
   const env = context.env;
