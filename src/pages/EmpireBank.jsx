@@ -65,7 +65,7 @@ export default function Bank() {
     setLoading(true);
     setErr("");
 
-    // 1) Upsert user (niet breken op 4xx)
+    // 1) ensure user exists (best-effort)
     try {
       await fetch(`${API_BASE}/api/me`, {
         method: "POST",
@@ -74,53 +74,85 @@ export default function Bank() {
       });
     } catch {}
 
-    // 2) Kandidaten-URLs (same-origin fallback als API_BASE leeg/fout is)
+    // 2) try multiple endpoints (avoid HTML/SPA responses)
+    const origin = (typeof location !== "undefined" && location.origin) ? location.origin : "";
     const qs = `?wallet=${encodeURIComponent(address)}`;
-    const candidates = [
+    const paths = [
       `${API_BASE}/api/me/balances`,
       `${API_BASE}/api/me/balances${qs}`,
+      `${origin}/api/me/balances`,
+      `${origin}/api/me/balances${qs}`,
       `/api/me/balances`,
       `/api/me/balances${qs}`,
       `/me/balances`,
       `/me/balances${qs}`,
     ]
       .filter(Boolean)
-      .map(u => u.replace(/\/{2,}/g, "/").replace(":/", "://")); // nettere slashes
+      .map(u => u.replace(/\/{2,}/g, "/").replace(":/", "://"));
 
-    let payload = null, lastStatus = 0, lastBody = "";
-    for (const url of candidates) {
+    const wantJson = (h) =>
+      typeof h === "string" && h.toLowerCase().includes("application/json");
+
+    let payload = null, lastStatus = 0, lastCT = "", lastBody = "";
+
+    for (const url of paths) {
       try {
         const res = await fetch(url, {
           headers: { "X-Wallet-Address": address, "accept": "application/json" },
           cache: "no-store",
         });
         lastStatus = res.status;
+        lastCT = res.headers.get("content-type") || "";
+        // if it isn't JSON, it's probably the SPA — skip to next candidate
+        if (!wantJson(lastCT)) {
+          continue;
+        }
         const txt = await res.text();
         lastBody = txt;
         if (!res.ok) continue;
+
         const j = txt ? JSON.parse(txt) : {};
-        // accepteer verschillende vormen
-        payload = Array.isArray(j) ? j : (Array.isArray(j?.balances) ? j.balances : null);
+
+        // Accept several shapes:
+        //  A) array of rows
+        //  B) { balances: [...] }
+        //  C) { rows: [...] }
+        //  D) { balances: { SYM: number, ... } }
+        if (Array.isArray(j)) {
+          payload = j;
+        } else if (Array.isArray(j?.balances)) {
+          payload = j.balances;
+        } else if (Array.isArray(j?.rows)) {
+          payload = j.rows;
+        } else if (j && j.balances && typeof j.balances === "object" && !Array.isArray(j.balances)) {
+          // balances is a map {SYM:number}
+          payload = Object.entries(j.balances).map(([k, v]) => ({
+            token_symbol: k,
+            balance: v,
+          }));
+        }
+
         if (payload) break;
-      } catch {}
+      } catch (e) {
+        // try next candidate
+      }
     }
 
     if (!payload) {
-      // toon duidelijke melding; handig tijdens dev
       setErr(`Could not load balances (last status ${lastStatus}).`);
       if (import.meta.env.DEV) {
-        console.warn("[Bank] balances last response:", lastStatus, lastBody);
+        console.warn("[Bank] last content-type:", lastCT);
+        console.warn("[Bank] last body:", lastBody?.slice(0, 400));
+        console.warn("[Bank] tried URLs:", paths);
       }
-      // fallback: alles 0 (maar nu mét foutmelding boven de lijst)
       setBalances(Object.fromEntries(TOKENS.map(t => [t.sym, 0])));
       return;
     }
 
-    // 3) Normaliseer naar {SYM: number}
+    // 3) normalize to {SYM: number}
     const map = Object.fromEntries(TOKENS.map(t => [t.sym, 0]));
     for (const row of payload) {
-      const sym =
-        String(row?.token_symbol ?? row?.symbol ?? row?.token ?? "").toUpperCase();
+      const sym = String(row?.token_symbol ?? row?.symbol ?? row?.token ?? "").toUpperCase();
       const num = Number(row?.balance ?? row?.amount ?? 0);
       if (!sym) continue;
       if (sym in map) map[sym] = Number.isFinite(num) ? num : 0;
@@ -133,6 +165,7 @@ export default function Bank() {
     setLoading(false);
   }
 };
+
 
 
   const fetchAnalytics = async () => {
