@@ -182,30 +182,33 @@ const refreshStamina = useCallback(async () => {
 
     const base = (PAGES_API || "").replace(/\/$/, "");
     // probeer: met base + zonder base (same-origin), met en zonder /api
-    const candidates = [
-      base ? `${base}/api/me/stamina` : null,
-      base ? `${base}/me/stamina` : null,
-      `/api/me/stamina`,
-      `/me/stamina`,
-    ].filter(Boolean);
+ const qs = `?wallet=${encodeURIComponent(address)}`;
+ const candidates = [
+    // met header + met querystring — verschillende proxies/edge varianten
+    base ? `${base}/api/me/stamina` : null,
+    base ? `${base}/api/me/stamina${qs}` : null,
+    base ? `${base}/me/stamina` : null,
+    base ? `${base}/me/stamina${qs}` : null,
+    `/api/me/stamina`,
+    `/api/me/stamina${qs}`,
+    `/me/stamina`,
+    `/me/stamina${qs}`,
+  ].filter(Boolean);
 
     let data = null, lastErr = null;
 
     for (const url of candidates) {
       try {
         const res = await fetch(url, {
-          headers: { "X-Wallet-Address": address },
+          headers: { "X-Wallet-Address": address, "accept": "application/json" },
           cache: "no-store",
         });
-        const txt = await res.text();
-        if (!txt) throw new Error("empty response");
-        const j = JSON.parse(txt);
-        if (typeof j === "object" && ("stamina" in j || "cap" in j)) {
-          data = j;
-          break;
-        } else {
-          throw new Error("json missing fields");
-        }
+        // sla lege/405/redirect responses over
+        if (!res.ok) continue;
+        const j = await res.json().catch(() => null);
+        const hasNums =
+          j && Number.isFinite(Number(j.stamina)) && Number.isFinite(Number(j.cap));
+        if (hasNums) { data = j; break; }
       } catch (e) { lastErr = e; }
     }
 
@@ -234,6 +237,16 @@ const refreshStamina = useCallback(async () => {
   useEffect(() => {
     refreshStamina();
   }, [refreshStamina]);
+
+  useEffect(() => {
+   const onFocus = () => refreshStamina().catch(()=>{});
+   window.addEventListener("visibilitychange", onFocus);
+   window.addEventListener("focus", onFocus);
+  return () => {
+    window.removeEventListener("visibilitychange", onFocus);
+    window.removeEventListener("focus", onFocus);
+  };
+}, [refreshStamina]);
 
   /* ---------- derived UI values ---------- */
   const staminaPct = useMemo(() => {

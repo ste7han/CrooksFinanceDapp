@@ -267,8 +267,8 @@ export default function EmpireHeists() {
 
   // Next +1 label (from backend timing)
   const nextLabel = useMemo(() => {
-    if (staminaCap === 0 || stamina == null || staminaCap == null) return "Full";
-    if (stamina >= staminaCap) return "Full";
+    if (stamina == null || staminaCap == null) return "—";
+    if (staminaCap === 0 || stamina >= staminaCap) return "Full";
     return nextTickMs > 0 ? `Next +1 in ${fmtETA(nextTickMs)}` : "—";
   }, [stamina, staminaCap, nextTickMs]);
 
@@ -408,9 +408,11 @@ export default function EmpireHeists() {
             }
             // % towards the next +1 (fills over the hour)
             progressPct={
-              staminaCap > 0 && stamina != null && stamina < staminaCap
-                ? Math.max(0, Math.min(1, 1 - (Number(nextTickMs || 0) / 3_600_000)))
-                : 1
+              (stamina != null && staminaCap != null)
+                ? (staminaCap > 0 && stamina < staminaCap
+                    ? Math.max(0, Math.min(1, 1 - (Number(nextTickMs || 0) / 3_600_000)))
+                    : 1)
+                : 0
             }
             subRight={nextLabel}
           />
