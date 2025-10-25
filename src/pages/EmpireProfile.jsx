@@ -21,6 +21,11 @@ const CRKL_NFT_ADDRESS = (import.meta.env.VITE_CRKL_NFT_ADDRESS ||
 const WEAPON_NFT_ADDRESS = (import.meta.env.VITE_WEAPON_NFT_ADDRESS ||
   "0xB09b903403775Ac0e294B845bF157Bd6A5e8e329").trim();
 
+// Always show these tokens (even if balance = 0)
+const ALL_TOKENS = [
+  "CRKS", "CRO", "CROCARD", "MOON", "BOBZ", "BONE", "CRY", "KRIS",
+];
+
 const CRKS_ADDRESS = (import.meta.env.VITE_CRKS_CA || "").trim(); // set in .env to enable multiplier
 const API_BASE =
   (import.meta.env.VITE_PAGES_API ||
@@ -217,34 +222,47 @@ export default function EmpireProfile() {
   }, [address, hydrateFromWallet]);
 
   // Fetch balances from backend (top-level effect)
-  useEffect(() => {
-    if (!address) {
-      setBackendBalances([]);
-      return;
+useEffect(() => {
+  if (!address) {
+    // Show full list with zeros when no wallet yet
+    setBackendBalances(ALL_TOKENS.map(sym => ({ token_symbol: sym, balance: 0 })));
+    return;
+  }
+  (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/me/balances`, {
+        headers: { "X-Wallet-Address": address },
+        cache: "no-store",
+      });
+      const j = await res.json().catch(() => null);
+
+      // normalize incoming rows → [{ token_symbol, balance }]
+      const incoming = Array.isArray(j?.balances) ? j.balances
+                      : Array.isArray(j) ? j
+                      : [];
+
+      const normalized = incoming.map((row) => {
+        const sym = String(row?.token_symbol || row?.symbol || row?.token || "").toUpperCase();
+        const bal = Number(row?.balance ?? row?.amount ?? 0);
+        return sym ? { token_symbol: sym, balance: Number.isFinite(bal) ? bal : 0 } : null;
+      }).filter(Boolean);
+
+      // Merge with canonical list → always show all tokens
+      const map = new Map(normalized.map(r => [r.token_symbol.toUpperCase(), r.balance]));
+      const complete = ALL_TOKENS.map(sym => ({
+        token_symbol: sym,
+        balance: Number(map.get(sym) ?? 0),
+      }));
+
+      setBackendBalances(complete);
+    } catch (e) {
+      console.warn("Failed to load backend balances:", e);
+      // On error, still show full list with zeros
+      setBackendBalances(ALL_TOKENS.map(sym => ({ token_symbol: sym, balance: 0 })));
     }
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/me/balances`, {
-          headers: { "X-Wallet-Address": address },
-        });
-        // Expect either { balances: [...] } or directly an array
-        const j = await res.json().catch(() => null);
-        const arr = Array.isArray(j?.balances) ? j.balances : (Array.isArray(j) ? j : []);
-        // Normalize to [{ token_symbol, balance }]
-        const normalized = arr
-          .map((row) => {
-            const sym = row?.token_symbol || row?.symbol || row?.token || "";
-            const bal = Number(row?.balance ?? row?.amount ?? 0);
-            return sym ? { token_symbol: sym, balance: bal } : null;
-          })
-          .filter(Boolean);
-        setBackendBalances(normalized);
-      } catch (e) {
-        console.warn("Failed to load backend balances:", e);
-        setBackendBalances([]);
-      }
-    })();
-  }, [address]);
+  })();
+}, [address]);
+
 
   const [readProvider, setReadProvider] = useState(null);
 
@@ -418,14 +436,38 @@ export default function EmpireProfile() {
                 Not on Cronos (25)
               </span>
             )}
+
+            {/* Quick nav */}
             <Link
               to="/empire/bank"
               className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}
             >
               Bank
             </Link>
-            <button className={BTN_GHOST} onClick={() => { refreshStamina().catch(()=>{}); }}
-             >
+            <Link
+              to="/empire/heists"
+              className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}
+            >
+              Heists
+            </Link>
+            <Link
+              to="/empire/armory"
+              className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}
+            >
+              Armory
+            </Link>
+            <Link
+              to="/empire/casino"
+              className={`${BTN} bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl`}
+            >
+              Casino
+            </Link>
+
+            {/* Manual refresh (kept) */}
+            <button
+              className={BTN_GHOST}
+              onClick={() => { refreshStamina().catch(() => {}); }}
+            >
               Refresh
             </button>
           </div>
